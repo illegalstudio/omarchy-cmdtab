@@ -16,9 +16,14 @@ Item {
   property string filterText: ""
   property int selectedIndex: 0
   property var windows: []
+  // Address of the window Hyprland had focused when the switcher opened, so
+  // the first highlight can land one step past it the way Cmd+Tab does.
+  property string activeAddress: ""
   // Selection is tracked by address as well as by row so a background poll
   // that reorders or trims the list cannot move the highlight under the user.
   property string selectedAddress: ""
+  property bool pendingInitial: false
+  property int initialStep: 1
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -39,10 +44,19 @@ Item {
   }
 
   function open(payloadJson) {
+    var step = 1
+    try {
+      var payload = JSON.parse(payloadJson || "{}") || {}
+      if (payload.step !== undefined) step = Number(payload.step)
+    } catch (error) { step = 1 }
+    if (!isFinite(step) || step === 0) step = 1
+
     root.opened = true
     root.filterText = ""
     root.selectedIndex = 0
     root.selectedAddress = ""
+    root.initialStep = step
+    root.pendingInitial = true
     if (root.appLibrary) root.appLibrary.refreshIcons()
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -63,10 +77,11 @@ Item {
   }
 
   function refresh() {
-    if (!clientsProc.running) {
-      root.loading = true
-      clientsProc.running = true
-    }
+    if (activeProc.running || clientsProc.running) return
+    root.loading = true
+    // activewindow first: loadClients needs the focused address to place the
+    // initial highlight, and chaining keeps the two views of the same instant.
+    activeProc.running = true
   }
 
   function loadClients(raw) {
@@ -74,6 +89,7 @@ Item {
     try { parsed = JSON.parse(raw || "[]") } catch (error) { parsed = [] }
 
     var next = []
+    var haveFocusHistory = parsed.length > 0
     for (var i = 0; i < parsed.length; i++) {
       var client = parsed[i]
       if (client.mapped === false || !client.address) continue
@@ -81,21 +97,35 @@ Item {
       var title = String(client.title || client.initialTitle || appClass)
       var workspace = client.workspace || {}
       var resolvedIcon = root.iconForClass(appClass)
+      // Hyprland ranks clients by how recently each held focus: 0 is the
+      // window in front of you, 1 the one before it, and so on.
+      var focusOrder = Number(client.focusHistoryID)
+      if (!isFinite(focusOrder)) {
+        focusOrder = next.length
+        haveFocusHistory = false
+      }
       next.push({
         address: String(client.address),
         appClass: appClass,
         appIcon: resolvedIcon,
         title: title,
+        focusOrder: focusOrder,
         workspaceId: Number(workspace.id || 0),
         workspaceName: String(workspace.name || workspace.id || "")
       })
     }
-    next.sort(function(a, b) {
-      if (a.workspaceId !== b.workspaceId) return a.workspaceId - b.workspaceId
-      return a.appClass.localeCompare(b.appClass)
-    })
+    // Most-recently-used order, like macOS Cmd+Tab. Hyprland builds that
+    // predate focusHistoryID fall back to the old workspace grouping.
+    if (haveFocusHistory) {
+      next.sort(function(a, b) { return a.focusOrder - b.focusOrder })
+    } else {
+      next.sort(function(a, b) {
+        if (a.workspaceId !== b.workspaceId) return a.workspaceId - b.workspaceId
+        return a.appClass.localeCompare(b.appClass)
+      })
+    }
     root.windows = next
-    root.rebuildDisplay()
+    root.rebuildDisplay(root.pendingInitial ? "initial" : "restore")
     root.loading = false
   }
 
@@ -152,8 +182,9 @@ Item {
     return -1
   }
 
-  // mode: "top" jumps to the best match after the query changed, "restore"
-  // (default) keeps the highlight on whichever window it was already on.
+  // mode: "initial" places the first highlight relative to the focused window,
+  // "top" jumps to the best match after the query changed, "restore" (default)
+  // keeps the highlight on whichever window it was already on.
   function rebuildDisplay(mode) {
     var intent = mode || "restore"
     var query = root.filterText.toLowerCase().trim()
@@ -172,9 +203,19 @@ Item {
       return
     }
 
-    var restored = intent === "restore" ? root.rowIndexOf(previous) : -1
-    root.selectedIndex = restored >= 0 ? restored
-      : (intent === "top" ? 0 : Math.max(0, Math.min(root.selectedIndex, count - 1)))
+    if (intent === "initial") {
+      root.pendingInitial = false
+      // One step past the window you are on, so a single SUPER+TAB and Enter
+      // returns to the window you last used. With nothing focused (an empty
+      // workspace) row 0 is already that window, so forward starts there.
+      var active = root.rowIndexOf(root.activeAddress)
+      var anchor = active >= 0 ? active : (root.initialStep > 0 ? -1 : 0)
+      root.selectedIndex = ((anchor + root.initialStep) % count + count) % count
+    } else {
+      var restored = intent === "restore" ? root.rowIndexOf(previous) : -1
+      root.selectedIndex = restored >= 0 ? restored
+        : (intent === "top" ? 0 : Math.max(0, Math.min(root.selectedIndex, count - 1)))
+    }
     root.selectedAddress = displayModel.get(root.selectedIndex).address
     Qt.callLater(function() {
       if (displayModel.count > 0) resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
@@ -216,6 +257,23 @@ Item {
   Connections {
     target: root.appLibrary
     function onAppsChanged() { if (root.opened) root.refresh() }
+  }
+
+  Process {
+    id: activeProc
+    command: ["hyprctl", "-j", "activewindow"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var address = ""
+        try {
+          var active = JSON.parse(text || "{}")
+          if (active && active.address) address = String(active.address)
+        } catch (error) { address = "" }
+        root.activeAddress = address
+        clientsProc.running = true
+      }
+    }
   }
 
   Process {
