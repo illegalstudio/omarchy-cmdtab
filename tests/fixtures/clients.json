@@ -1,0 +1,92 @@
+[
+  {
+    "address": "0x1000",
+    "mapped": true,
+    "class": "kitty",
+    "initialClass": "kitty",
+    "title": "~/Developer/illegalstudio/omarchy-cmdtab",
+    "initialTitle": "kitty",
+    "workspace": { "id": 1, "name": "1" },
+    "focusHistoryID": 0
+  },
+  {
+    "address": "0x1001",
+    "mapped": true,
+    "class": "google-chrome",
+    "initialClass": "google-chrome",
+    "title": "Omarchy Plugins - Google Chrome",
+    "initialTitle": "Google Chrome",
+    "workspace": { "id": 1, "name": "1" },
+    "focusHistoryID": 1
+  },
+  {
+    "address": "0x1002",
+    "mapped": true,
+    "class": "org.gnome.Nautilus",
+    "initialClass": "org.gnome.Nautilus",
+    "title": "Downloads",
+    "initialTitle": "Files",
+    "workspace": { "id": 3, "name": "3" },
+    "focusHistoryID": 2
+  },
+  {
+    "address": "0x1003",
+    "mapped": true,
+    "class": "md.obsidian.Obsidian",
+    "initialClass": "obsidian",
+    "title": "Inbox - Vault - Obsidian",
+    "initialTitle": "Obsidian",
+    "workspace": { "id": 2, "name": "2" },
+    "focusHistoryID": 3
+  },
+  {
+    "address": "0x1004",
+    "mapped": false,
+    "class": "org.freedesktop.Ghost",
+    "initialClass": "org.freedesktop.Ghost",
+    "title": "Unmapped window",
+    "initialTitle": "Unmapped window",
+    "workspace": { "id": 2, "name": "2" },
+    "focusHistoryID": 4
+  },
+  {
+    "address": "0x1005",
+    "mapped": true,
+    "class": "Slack",
+    "initialClass": "Slack",
+    "title": "general (illegalstudio) - Slack",
+    "initialTitle": "Slack",
+    "workspace": { "id": 3, "name": "3" },
+    "focusHistoryID": 5
+  },
+  {
+    "address": "0x1006",
+    "mapped": true,
+    "class": "code",
+    "initialClass": "code",
+    "title": "Cmdtab.qml - omarchy-cmdtab",
+    "initialTitle": "Visual Studio Code",
+    "workspace": { "id": 2, "name": "2" },
+    "focusHistoryID": 6
+  },
+  {
+    "address": "0x1007",
+    "mapped": true,
+    "class": "org.telegram.desktop",
+    "initialClass": "org.telegram.desktop",
+    "title": "Saved Messages",
+    "initialTitle": "Telegram",
+    "workspace": { "id": 4, "name": "4" },
+    "focusHistoryID": 7
+  },
+  {
+    "address": "0x1008",
+    "mapped": true,
+    "class": "spotify",
+    "initialClass": "spotify",
+    "title": "Discover Weekly",
+    "initialTitle": "Spotify",
+    "workspace": { "id": 1, "name": "1" },
+    "focusHistoryID": 8
+  }
+]
