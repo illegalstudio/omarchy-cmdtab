@@ -1,15 +1,16 @@
 {
   "schemaVersion": 1,
-  "id": "nahime.window-switcher",
-  "name": "Window Switcher",
-  "version": "1.0.0",
-  "author": "nahime",
-  "description": "Search and focus open Hyprland windows",
+  "id": "illegalstudio.omarchy-cmdtab",
+  "name": "Cmdtab",
+  "version": "0.1.0",
+  "author": "illegalstudio",
+  "license": "MIT",
+  "description": "macOS Cmd+Tab for Hyprland: switch windows in most-recently-used order from an Omarchy shell overlay.",
   "kinds": [
     "overlay"
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "WindowSwitcher.qml"
+    "overlay": "Cmdtab.qml"
   }
 }

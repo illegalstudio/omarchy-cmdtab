@@ -47,7 +47,7 @@ Item {
   property int rowHeight: Math.max(Style.space(58), Style.font.body + Style.font.caption + Style.spacing.rowPaddingX * 2)
 
   function pluginId() {
-    return (root.manifest && root.manifest.id) || "nahime.window-switcher"
+    return (root.manifest && root.manifest.id) || "illegalstudio.omarchy-cmdtab"
   }
 
   function open(payloadJson) {
@@ -90,7 +90,7 @@ Item {
   }
 
   // IPC entry point for the keybinding:
-  //   omarchy-shell shell call nahime.window-switcher cycle 1
+  //   omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle 1
   // Bound instead of `shell toggle` so holding SUPER and tapping TAB keeps
   // stepping down the list rather than closing the overlay on the second tap.
   function cycle(step) {
@@ -102,7 +102,7 @@ Item {
   }
 
   // What Enter does, reachable over IPC:
-  //   omarchy-shell shell call nahime.window-switcher confirm ""
+  //   omarchy-shell shell call illegalstudio.omarchy-cmdtab confirm ""
   function confirm() {
     if (!root.opened) return "closed"
     root.activate(root.selectedIndex)
@@ -352,7 +352,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "nahime-window-switcher"
+    WlrLayershell.namespace: "omarchy-cmdtab"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
