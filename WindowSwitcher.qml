@@ -51,6 +51,10 @@ Item {
     } catch (error) { step = 1 }
     if (!isFinite(step) || step === 0) step = 1
 
+    // A second summon while the overlay is up means "keep walking the list",
+    // never "reset it".
+    if (root.opened) { root.moveSelection(step); return }
+
     root.opened = true
     root.filterText = ""
     root.selectedIndex = 0
@@ -74,6 +78,26 @@ Item {
   function toggle() {
     if (root.opened) root.dismiss()
     else root.open("{}")
+  }
+
+  // IPC entry point for the keybinding:
+  //   omarchy-shell shell call nahime.window-switcher cycle 1
+  // Bound instead of `shell toggle` so holding SUPER and tapping TAB keeps
+  // stepping down the list rather than closing the overlay on the second tap.
+  function cycle(step) {
+    var delta = Number(step)
+    if (!isFinite(delta) || delta === 0) delta = 1
+    if (root.opened) root.moveSelection(delta)
+    else root.open(JSON.stringify({ step: delta }))
+    return "ok"
+  }
+
+  // What Enter does, reachable over IPC:
+  //   omarchy-shell shell call nahime.window-switcher confirm ""
+  function confirm() {
+    if (!root.opened) return "closed"
+    root.activate(root.selectedIndex)
+    return "ok"
   }
 
   function refresh() {
@@ -328,6 +352,11 @@ Item {
             if (root.filterText) root.setFilter("")
             else root.dismiss()
             event.accepted = true
+          } else if (event.key === Qt.Key_Backtab
+                     || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
+            root.moveSelection(-1); event.accepted = true
+          } else if (event.key === Qt.Key_Tab) {
+            root.moveSelection(1); event.accepted = true
           } else if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier) {
             root.moveSelection(-1); event.accepted = true
           } else if (event.key === Qt.Key_N && event.modifiers === Qt.ControlModifier) {
