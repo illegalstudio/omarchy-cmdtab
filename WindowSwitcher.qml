@@ -238,6 +238,10 @@ Item {
             if (root.filterText) root.setFilter("")
             else root.dismiss()
             event.accepted = true
+          } else if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier) {
+            root.moveSelection(-1); event.accepted = true
+          } else if (event.key === Qt.Key_N && event.modifiers === Qt.ControlModifier) {
+            root.moveSelection(1); event.accepted = true
           } else if (event.key === Qt.Key_Up) {
             root.moveSelection(-1); event.accepted = true
           } else if (event.key === Qt.Key_Down) {
