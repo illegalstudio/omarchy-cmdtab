@@ -24,6 +24,13 @@ Item {
   property string selectedAddress: ""
   property bool pendingInitial: false
   property int initialStep: 1
+  // Hover only claims the highlight once the pointer has actually moved over
+  // the overlay. Opening under a resting pointer, or scrolling rows beneath
+  // one, must not overwrite the keyboard selection.
+  property bool pointerEngaged: false
+  property bool pointerPrimed: false
+  property real pointerX: -1
+  property real pointerY: -1
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -61,6 +68,8 @@ Item {
     root.selectedAddress = ""
     root.initialStep = step
     root.pendingInitial = true
+    root.pointerEngaged = false
+    root.pointerPrimed = false
     if (root.appLibrary) root.appLibrary.refreshIcons()
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -247,6 +256,7 @@ Item {
   }
 
   function setFilter(value) {
+    root.pointerEngaged = false
     root.filterText = value
     root.rebuildDisplay("top")
   }
@@ -260,8 +270,28 @@ Item {
   function moveSelection(delta) {
     var count = displayModel.count
     if (count === 0) return
+    root.pointerEngaged = false
     root.selectIndex(((root.selectedIndex + delta) % count + count) % count)
     resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
+  }
+
+  // Scene coordinates, so a row sliding under a still pointer is not mistaken
+  // for the user aiming at it. Returns whether hover may drive the selection.
+  function notePointer(x, y) {
+    // The first position seen after opening is wherever the pointer happened
+    // to be resting, not a choice; record it as the baseline and ignore it.
+    if (!root.pointerPrimed) {
+      root.pointerPrimed = true
+      root.pointerX = x
+      root.pointerY = y
+      return false
+    }
+    if (Math.abs(x - root.pointerX) > 0.5 || Math.abs(y - root.pointerY) > 0.5) {
+      root.pointerX = x
+      root.pointerY = y
+      root.pointerEngaged = true
+    }
+    return root.pointerEngaged
   }
 
   function activate(index) {
@@ -502,7 +532,11 @@ Item {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onContainsMouseChanged: if (containsMouse) root.selectIndex(index)
+              onPositionChanged: function(mouse) {
+                var scene = mapToItem(null, mouse.x, mouse.y)
+                if (root.notePointer(scene.x, scene.y)) root.selectIndex(index)
+              }
+              onContainsMouseChanged: if (containsMouse && root.pointerEngaged) root.selectIndex(index)
               onClicked: root.activate(index)
             }
           }
