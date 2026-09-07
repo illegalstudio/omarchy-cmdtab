@@ -16,6 +16,9 @@ Item {
   property string filterText: ""
   property int selectedIndex: 0
   property var windows: []
+  // Selection is tracked by address as well as by row so a background poll
+  // that reorders or trims the list cannot move the highlight under the user.
+  property string selectedAddress: ""
 
   property color background: Color.menu.background
   property color foreground: Color.menu.text
@@ -39,6 +42,7 @@ Item {
     root.opened = true
     root.filterText = ""
     root.selectedIndex = 0
+    root.selectedAddress = ""
     if (root.appLibrary) root.appLibrary.refreshIcons()
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -140,16 +144,38 @@ Item {
     return rawClass.toLowerCase()
   }
 
-  function rebuildDisplay() {
+  function rowIndexOf(address) {
+    if (!address) return -1
+    for (var i = 0; i < displayModel.count; i++) {
+      if (displayModel.get(i).address === address) return i
+    }
+    return -1
+  }
+
+  // mode: "top" jumps to the best match after the query changed, "restore"
+  // (default) keeps the highlight on whichever window it was already on.
+  function rebuildDisplay(mode) {
+    var intent = mode || "restore"
     var query = root.filterText.toLowerCase().trim()
+    var previous = root.selectedAddress
     displayModel.clear()
     for (var i = 0; i < root.windows.length; i++) {
       var win = root.windows[i]
       var haystack = (win.appClass + " " + win.title + " " + win.workspaceName).toLowerCase()
       if (!query || haystack.indexOf(query) !== -1) displayModel.append(win)
     }
-    if (displayModel.count === 0) root.selectedIndex = 0
-    else root.selectedIndex = Math.max(0, Math.min(root.selectedIndex, displayModel.count - 1))
+
+    var count = displayModel.count
+    if (count === 0) {
+      root.selectedIndex = 0
+      root.selectedAddress = ""
+      return
+    }
+
+    var restored = intent === "restore" ? root.rowIndexOf(previous) : -1
+    root.selectedIndex = restored >= 0 ? restored
+      : (intent === "top" ? 0 : Math.max(0, Math.min(root.selectedIndex, count - 1)))
+    root.selectedAddress = displayModel.get(root.selectedIndex).address
     Qt.callLater(function() {
       if (displayModel.count > 0) resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
     })
@@ -157,13 +183,19 @@ Item {
 
   function setFilter(value) {
     root.filterText = value
-    root.selectedIndex = 0
-    root.rebuildDisplay()
+    root.rebuildDisplay("top")
+  }
+
+  function selectIndex(index) {
+    if (index < 0 || index >= displayModel.count) return
+    root.selectedIndex = index
+    root.selectedAddress = displayModel.get(index).address
   }
 
   function moveSelection(delta) {
-    if (displayModel.count === 0) return
-    root.selectedIndex = (root.selectedIndex + delta + displayModel.count) % displayModel.count
+    var count = displayModel.count
+    if (count === 0) return
+    root.selectIndex(((root.selectedIndex + delta) % count + count) % count)
     resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
   }
 
@@ -383,7 +415,7 @@ Item {
               anchors.fill: parent
               hoverEnabled: true
               cursorShape: Qt.PointingHandCursor
-              onContainsMouseChanged: if (containsMouse) root.selectedIndex = index
+              onContainsMouseChanged: if (containsMouse) root.selectIndex(index)
               onClicked: root.activate(index)
             }
           }
