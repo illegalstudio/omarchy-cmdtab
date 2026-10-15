@@ -12,7 +12,6 @@ Item {
   readonly property var desktopEntries: DesktopEntries.applications.values
   property bool opened: false
   property bool loading: false
-  property string filterText: ""
   property int selectedIndex: 0
   property var windows: []
   // Address of the window Hyprland had focused when the switcher opened, so
@@ -25,13 +24,8 @@ Item {
   property int initialStep: 1
   property string holdModifier: "super"
   property bool confirmOnLoad: false
-  // Hover only claims the highlight once the pointer has actually moved over
-  // the overlay. Opening under a resting pointer, or scrolling rows beneath
-  // one, must not overwrite the keyboard selection.
-  property bool pointerEngaged: false
-  property bool pointerPrimed: false
-  property real pointerX: -1
-  property real pointerY: -1
+  property bool keyboardApplied: false
+  property bool keyboardTarget: false
 
   property color background: Color.menu.background
   readonly property bool darkBackground: background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
@@ -63,7 +57,6 @@ Item {
     if (root.opened) { root.moveSelection(step); return }
 
     root.opened = true
-    root.filterText = ""
     root.selectedIndex = 0
     root.selectedAddress = ""
     displayModel.clear()
@@ -71,8 +64,7 @@ Item {
     root.holdModifier = payload && payload.modifier === "alt" ? "alt" : "super"
     root.confirmOnLoad = false
     root.pendingInitial = true
-    root.pointerEngaged = false
-    root.pointerPrimed = false
+    root.syncKeyboard()
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -80,6 +72,7 @@ Item {
   function close() {
     root.opened = false
     root.confirmOnLoad = false
+    root.syncKeyboard()
   }
 
   function dismiss() {
@@ -105,7 +98,7 @@ Item {
     return "ok"
   }
 
-  // What Enter does, reachable over IPC:
+  // Activate the current selection, also used when the held modifier is released:
   //   omarchy-shell shell call illegalstudio.omarchy-cmdtab confirm ""
   function confirm() {
     if (!root.opened) return "closed"
@@ -122,29 +115,45 @@ Item {
     return root.confirm()
   }
 
-  // Route SUPER+ESCAPE here so Hyprland's system-menu binding cannot
-  // take over while the switcher owns the keyboard.
-  function cancelOrMenu() {
-    if (root.opened) {
-      root.dismiss()
-      return "cancelled"
-    }
-    Quickshell.execDetached(["omarchy-menu", "toggle", "system"])
-    return "menu"
-  }
-
   function vimNavigate(key) {
+    if (!root.opened) return "closed"
     var delta = key === "h" ? -1 : key === "l" ? 1 : 0
     if (!delta) return "ignored"
-    if (root.opened) {
-      root.moveSelection(delta)
-      return "ok"
-    }
-    // Preserve the user's SUPER+H/L directional focus bindings when closed.
-    var code = delta < 0 ? 'hl.dispatch(hl.dsp.focus({ direction = "l" }))'
-      : 'hl.dispatch(hl.dsp.focus({ direction = "r" }))'
-    Quickshell.execDetached(["hyprctl", "eval", code])
-    return "focus"
+    root.moveSelection(delta)
+    return "ok"
+  }
+
+  function handleKey(key, modifiers) {
+    if (!root.opened) return false
+    if (key === Qt.Key_Escape) root.dismiss()
+    else if (key === Qt.Key_H) root.moveSelection(-1)
+    else if (key === Qt.Key_L) root.moveSelection(1)
+    else if (key === Qt.Key_Backtab || (key === Qt.Key_Tab && (modifiers & Qt.ShiftModifier))) root.moveSelection(-1)
+    else if (key === Qt.Key_Tab) root.moveSelection(1)
+    // Consume every other key without activating a command or editing text.
+    return true
+  }
+
+  function syncKeyboard() {
+    if (keyboardProc.running || root.keyboardApplied === root.opened) return
+    root.keyboardTarget = root.opened
+    var name = root.keyboardTarget ? "omarchy-cmdtab" : "reset"
+    keyboardProc.command = ["hyprctl", "eval", 'hl.dispatch(hl.dsp.submap("' + name + '"))']
+    keyboardProc.running = true
+  }
+
+  function keyboardFinished(exitCode) {
+    // The entry binding may already have captured input even if this process
+    // failed. Always attempt the matching reset before treating it as released.
+    root.keyboardApplied = root.keyboardTarget
+    if (exitCode !== 0 && root.keyboardTarget && root.opened) root.dismiss()
+    if (root.keyboardApplied !== root.opened)
+      Qt.callLater(function() { root.syncKeyboard() })
+  }
+
+  Component.onDestruction: {
+    if (root.opened || root.keyboardApplied || keyboardProc.running)
+      Quickshell.execDetached(["hyprctl", "eval", 'hl.dispatch(hl.dsp.submap("reset"))'])
   }
 
   function refresh() {
@@ -166,7 +175,6 @@ Item {
       var client = parsed[i]
       if (!client || client.mapped === false || !client.address) continue
       var appClass = String(client.class || client.initialClass || "Window")
-      var title = String(client.title || client.initialTitle || appClass)
       var workspace = client.workspace || {}
       var application = root.applicationFor(client)
       // Hyprland ranks clients by how recently each held focus: 0 is the
@@ -181,10 +189,8 @@ Item {
         appClass: appClass,
         appIcon: application.icon,
         appName: application.name,
-        title: title,
         focusOrder: focusOrder,
-        workspaceId: Number(workspace.id || 0),
-        workspaceName: String(workspace.name || workspace.id || "")
+        workspaceId: Number(workspace.id || 0)
       })
     }
     // Most-recently-used order, like macOS Cmd+Tab. Hyprland builds that
@@ -268,18 +274,15 @@ Item {
     return -1
   }
 
-  // mode: "initial" places the first highlight relative to the focused window,
-  // "top" jumps to the best match after the query changed, "restore" (default)
-  // keeps the highlight on whichever window it was already on.
+  // Initial selection is relative to the focused window. Refreshes preserve
+  // the selected address even when the compositor reorders the clients.
   function rebuildDisplay(mode) {
     var intent = mode || "restore"
-    var query = root.filterText.toLowerCase().trim()
     var previous = root.selectedAddress
     displayModel.clear()
     for (var i = 0; i < root.windows.length; i++) {
       var win = root.windows[i]
-      var haystack = (win.appName + " " + win.appClass + " " + win.title + " " + win.workspaceName).toLowerCase()
-      if (!query || haystack.indexOf(query) !== -1) displayModel.append(win)
+      displayModel.append(win)
     }
 
     var count = displayModel.count
@@ -299,20 +302,13 @@ Item {
       var anchor = active >= 0 ? active : (root.initialStep > 0 ? -1 : 0)
       root.selectedIndex = ((anchor + root.initialStep) % count + count) % count
     } else {
-      var restored = intent === "restore" ? root.rowIndexOf(previous) : -1
-      root.selectedIndex = restored >= 0 ? restored
-        : (intent === "top" ? 0 : Math.max(0, Math.min(root.selectedIndex, count - 1)))
+      var restored = root.rowIndexOf(previous)
+      root.selectedIndex = restored >= 0 ? restored : Math.max(0, Math.min(root.selectedIndex, count - 1))
     }
     root.selectedAddress = displayModel.get(root.selectedIndex).address
     Qt.callLater(function() {
       if (displayModel.count > 0) resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
     })
-  }
-
-  function setFilter(value) {
-    root.pointerEngaged = false
-    root.filterText = value
-    root.rebuildDisplay("top")
   }
 
   function selectIndex(index) {
@@ -325,28 +321,8 @@ Item {
     if (root.pendingInitial) { root.initialStep += delta; return }
     var count = displayModel.count
     if (count === 0) return
-    root.pointerEngaged = false
     root.selectIndex(((root.selectedIndex + delta) % count + count) % count)
     resultList.positionViewAtIndex(root.selectedIndex, ListView.Contain)
-  }
-
-  // Scene coordinates, so a row sliding under a still pointer is not mistaken
-  // for the user aiming at it. Returns whether hover may drive the selection.
-  function notePointer(x, y) {
-    // The first position seen after opening is wherever the pointer happened
-    // to be resting, not a choice; record it as the baseline and ignore it.
-    if (!root.pointerPrimed) {
-      root.pointerPrimed = true
-      root.pointerX = x
-      root.pointerY = y
-      return false
-    }
-    if (Math.abs(x - root.pointerX) > 0.5 || Math.abs(y - root.pointerY) > 0.5) {
-      root.pointerX = x
-      root.pointerY = y
-      root.pointerEngaged = true
-    }
-    return root.pointerEngaged
   }
 
   function activate(index) {
@@ -362,6 +338,11 @@ Item {
       + "hl.dispatch(hl.dsp.window.bring_to_top()) end"
     // Drop the exclusive layer keyboard focus before focusing the client.
     Qt.callLater(function() { Quickshell.execDetached(["hyprctl", "eval", code]) })
+  }
+
+  Process {
+    id: keyboardProc
+    onExited: function(exitCode, exitStatus) { root.keyboardFinished(exitCode) }
   }
 
   ListModel { id: displayModel }
@@ -407,7 +388,7 @@ Item {
 
   PanelWindow {
     id: panel
-    visible: root.opened
+    visible: root.opened && root.keyboardApplied && root.keyboardTarget
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     WlrLayershell.namespace: "omarchy-cmdtab"
@@ -415,7 +396,7 @@ Item {
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore
 
-    MouseArea { anchors.fill: parent; onClicked: root.dismiss() }
+    MouseArea { anchors.fill: parent; onClicked: {} }
 
     Rectangle {
       anchors.centerIn: card
@@ -453,33 +434,7 @@ Item {
           }
         }
         Keys.onPressed: function(event) {
-          if (event.key === Qt.Key_Escape) {
-            root.dismiss(); event.accepted = true
-          } else if (event.key === Qt.Key_Backtab
-                     || (event.key === Qt.Key_Tab && (event.modifiers & Qt.ShiftModifier))) {
-            root.moveSelection(-1); event.accepted = true
-          } else if (event.key === Qt.Key_Tab) {
-            root.moveSelection(1); event.accepted = true
-          } else if ((event.key === Qt.Key_H || event.key === Qt.Key_L)
-                     && !(event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier))) {
-            root.vimNavigate(event.key === Qt.Key_H ? "h" : "l"); event.accepted = true
-          } else if (event.key === Qt.Key_P && event.modifiers === Qt.ControlModifier) {
-            root.moveSelection(-1); event.accepted = true
-          } else if (event.key === Qt.Key_N && event.modifiers === Qt.ControlModifier) {
-            root.moveSelection(1); event.accepted = true
-          } else if (event.key === Qt.Key_Left || event.key === Qt.Key_Up) {
-            root.moveSelection(-1); event.accepted = true
-          } else if (event.key === Qt.Key_Right || event.key === Qt.Key_Down) {
-            root.moveSelection(1); event.accepted = true
-          } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-            root.confirm(); event.accepted = true
-          } else if (Util.editsFilter(event, root.filterText)) {
-            root.setFilter(Util.editedFilter(event, root.filterText)); event.accepted = true
-          } else if (!(event.modifiers & (Qt.ControlModifier | Qt.AltModifier))
-                     && event.text && event.text.length === 1
-                     && event.text.charCodeAt(0) >= 32 && event.text.charCodeAt(0) !== 127) {
-            root.setFilter(root.filterText + event.text); event.accepted = true
-          }
+          event.accepted = root.handleKey(event.key, event.modifiers)
         }
       }
 
@@ -490,6 +445,7 @@ Item {
         width: parent.width - root.contentMargin * 2
         height: root.tileSize
         orientation: ListView.Horizontal
+        interactive: false
         model: displayModel
         clip: true
         boundsBehavior: Flickable.StopAtBounds
@@ -560,17 +516,7 @@ Item {
             elide: Text.ElideRight
           }
 
-          MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onPositionChanged: function(mouse) {
-              var scene = mapToItem(null, mouse.x, mouse.y)
-              if (root.notePointer(scene.x, scene.y)) root.selectIndex(index)
-            }
-            onContainsMouseChanged: if (containsMouse && root.pointerEngaged) root.selectIndex(index)
-            onClicked: root.activate(index)
-          }
+
         }
       }
     }

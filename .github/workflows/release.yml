@@ -33,10 +33,16 @@ jobs:
             exit 1
           fi
 
+      - name: Install Lua for binding tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4
+
       - name: Test
         run: |
           python3 -m json.tool manifest.json >/dev/null
           node tests/switcher.test.js
+          lua5.4 tests/hyprland.test.lua
 
       - name: Publish GitHub Release
         env:

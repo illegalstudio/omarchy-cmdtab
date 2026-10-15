@@ -1,6 +1,7 @@
 .PHONY: check release test validate
 
 NODE ?= node
+LUA ?= lua
 OMARCHY ?= omarchy
 PYTHON ?= python3
 
@@ -12,6 +13,7 @@ validate:
 
 test:
 	@$(NODE) tests/switcher.test.js
+	@$(LUA) tests/hyprland.test.lua
 
 release:
 	@scripts/release.sh

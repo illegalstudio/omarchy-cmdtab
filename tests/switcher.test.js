@@ -16,10 +16,10 @@ const fixture = fs.readFileSync(
 // Everything the overlay decides with, minus the parts that talk to Hyprland,
 // Quickshell, or the scene graph. Those are stubbed on the fake root below.
 const EXTRACTED = [
-  "loadClients", "rowIndexOf", "rebuildDisplay", "setFilter", "selectIndex",
-  "moveSelection", "notePointer", "cycle", "open", "toggle", "dismiss",
+  "loadClients", "rowIndexOf", "rebuildDisplay", "selectIndex",
+  "moveSelection", "cycle", "open", "toggle", "dismiss",
   "close", "confirm",
-  "release", "cancelOrMenu", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate",
+  "release", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
 ];
 
 function extract(name) {
@@ -34,13 +34,13 @@ function extract(name) {
 }
 
 const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "ListView",
-  "DesktopEntries", "Quickshell", "Util", `
+  "DesktopEntries", "Quickshell", "Util", "keyboardProc", `
   const root = {
-    opened: false, loading: false, filterText: "", selectedIndex: 0, windows: [],
+    opened: false, loading: false, selectedIndex: 0, windows: [],
     activeAddress: "", selectedAddress: "", pendingInitial: false, initialStep: 1,
-    pointerEngaged: false, pointerPrimed: false, pointerX: -1, pointerY: -1,
     desktopEntries: [], shell: null, manifest: null, activated: -1,
     holdModifier: "super", confirmOnLoad: false, runActivation: false,
+    keyboardApplied: false, keyboardTarget: false,
     refresh() { root.refreshes = (root.refreshes || 0) + 1; },
     activate(index) { root.activated = index; if (root.runActivation) activate(index); },
   };
@@ -48,6 +48,16 @@ const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "Li
   ${EXTRACTED.filter((name) => name !== "activate").map((name) => `root.${name} = ${name};`).join("\n")}
   return root;
 `);
+
+const QT = {
+  Key_Escape: 0x01000000, Key_Tab: 0x01000001, Key_Backtab: 0x01000002,
+  Key_H: 72, Key_L: 76, Key_Return: 0x01000004,
+  Key_Left: 0x01000012, Key_Right: 0x01000014,
+  Key_N: 78, Key_P: 80, Key_A: 65, Key_Backspace: 0x01000003,
+  ShiftModifier: 0x02000000, ControlModifier: 0x04000000,
+  AltModifier: 0x08000000, MetaModifier: 0x10000000,
+  callLater(fn) { fn(); },
+};
 
 function makeRoot() {
   const displayModel = {
@@ -58,17 +68,19 @@ function makeRoot() {
     get count() { return this.rows.length; },
   };
   const commands = [];
+  const keyboardProc = { running: false, command: [] };
   const root = build(
     displayModel,
     { positionViewAtIndex() {} },
     { forceActiveFocus() {} },
-    { callLater(fn) { fn(); } },
+    QT,
     { Contain: 0 },
     { heuristicLookup() { return null; } },
     { execDetached(command) { commands.push(command); },
       iconPath(icon) { return "image://icon/" + icon; } },
-    { fileUrl(file) { return "file://" + file; } });
+    { fileUrl(file) { return "file://" + file; } }, keyboardProc);
   root.commands = commands;
+  root.keyboardProc = keyboardProc;
   return root;
 }
 
@@ -162,7 +174,7 @@ test("the selection wraps in both directions", () => {
   assert.ok(root.selectedIndex >= 0 && root.selectedIndex < count);
 });
 
-test("Vim h/l navigate and wrap without editing the filter or changing window focus", () => {
+test("Vim h/l navigate and wrap without changing window focus", () => {
   const root = openedSwitcher();
   assert.equal(root.vimNavigate("h"), "ok");
   assert.equal(root.selectedIndex, 0);
@@ -170,7 +182,6 @@ test("Vim h/l navigate and wrap without editing the filter or changing window fo
   assert.equal(root.selectedIndex, addresses.length - 1);
   root.vimNavigate("l");
   assert.equal(root.selectedIndex, 0);
-  assert.equal(root.filterText, "");
   assert.deepEqual(root.commands, []);
 });
 
@@ -185,35 +196,11 @@ test("Vim navigation during loading is applied after clients arrive", () => {
   assert.equal(root.selectedIndex, 2);
 });
 
-test("Vim bindings preserve directional focus when the switcher is closed", () => {
+test("Vim navigation outside the switcher has no global side effects", () => {
   const root = makeRoot();
-  assert.equal(root.vimNavigate("h"), "focus");
-  assert.equal(root.vimNavigate("l"), "focus");
-  assert.deepEqual(root.commands, [
-    ["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({ direction = "l" }))'],
-    ["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({ direction = "r" }))'],
-  ]);
-  assert.equal(root.vimNavigate("other"), "ignored");
-  assert.equal(root.commands.length, 2);
-});
-
-test("filtering jumps to the most recently used match", () => {
-  const root = openedSwitcher(1);
-  root.setFilter("chrome");
-  assert.equal(root.selectedIndex, 0);
-  assert.equal(root.selectedAddress, "0x1001");
-
-  root.setFilter("no such window");
-  assert.equal(root.selectedIndex, 0);
-  assert.equal(root.selectedAddress, "");
-});
-
-test("the title, class, and workspace are all searchable", () => {
-  const root = openedSwitcher(1);
-  root.setFilter("obsidian");
-  assert.equal(root.selectedAddress, "0x1003");
-  root.setFilter("downloads");
-  assert.equal(root.selectedAddress, "0x1002");
+  assert.equal(root.vimNavigate("h"), "closed");
+  assert.equal(root.vimNavigate("l"), "closed");
+  assert.deepEqual(root.commands, []);
 });
 
 test("a refresh cannot move the highlight to another window", () => {
@@ -229,32 +216,6 @@ test("a refresh cannot move the highlight to another window", () => {
 
   assert.equal(root.selectedAddress, held);
   assert.deepEqual(root.windows.map((w) => w.address), addresses.slice(0, -1));
-});
-
-test("hover is ignored until the pointer actually moves", () => {
-  const root = openedSwitcher(1);
-  // Opening under a resting pointer: the first position is only a baseline.
-  assert.equal(root.notePointer(500, 400), false);
-  assert.equal(root.notePointer(500, 400), false);
-  // A real movement hands control to the mouse.
-  assert.equal(root.notePointer(520, 400), true);
-  assert.equal(root.notePointer(520, 400), true);
-  // Any keyboard move takes it back, so scrolling rows cannot steal it.
-  root.moveSelection(1);
-  assert.equal(root.pointerEngaged, false);
-  assert.equal(root.notePointer(520, 400), false);
-});
-
-test("reopening forgets the previous pointer position", () => {
-  const root = openedSwitcher(1);
-  root.notePointer(500, 400);
-  root.notePointer(700, 600);
-  assert.equal(root.pointerEngaged, true);
-  root.dismiss();
-  root.cycle("1");
-  root.loadClients(fixture);
-  assert.equal(root.pointerEngaged, false);
-  assert.equal(root.notePointer(900, 800), false);
 });
 
 test("Hyprland builds without focusHistoryID still list every window", () => {
@@ -362,8 +323,7 @@ test("cancelling during loading prevents delayed activation", () => {
 
 test("SUPER+ESCAPE cancels the switcher without opening the system menu", () => {
   const root = openedSwitcher();
-  root.setFilter("obsidian");
-  assert.equal(root.cancelOrMenu(), "cancelled");
+  assert.equal(root.handleKey(QT.Key_Escape, QT.MetaModifier), true);
   assert.equal(root.opened, false);
   assert.equal(root.release("super"), "closed");
   assert.equal(root.activated, -1);
@@ -374,28 +334,11 @@ test("SUPER+ESCAPE during loading cancels a pending confirmation", () => {
   const root = makeRoot();
   root.cycle("1");
   root.release("super");
-  assert.equal(root.cancelOrMenu(), "cancelled");
+  assert.equal(root.handleKey(QT.Key_Escape, QT.MetaModifier), true);
   root.loadClients(fixture);
   assert.equal(root.opened, false);
   assert.equal(root.activated, -1);
   assert.deepEqual(root.commands, []);
-});
-
-test("SUPER+ESCAPE keeps the system-menu shortcut when the switcher is closed", () => {
-  const root = makeRoot();
-  assert.equal(root.cancelOrMenu(), "menu");
-  assert.deepEqual(root.commands, [["omarchy-menu", "toggle", "system"]]);
-});
-
-test("filtering before clients arrive still waits for the query on release", () => {
-  const root = makeRoot();
-  root.cycle("1");
-  root.setFilter("obsidian");
-  assert.equal(root.release("super"), "pending");
-  assert.equal(root.opened, true);
-  root.loadClients(fixture);
-  assert.equal(root.selectedAddress, "0x1003");
-  assert.equal(root.activated, 0);
 });
 
 test("malformed client payloads produce an empty result instead of throwing", () => {
@@ -464,6 +407,60 @@ test("icon sources preserve absolute paths and existing URLs", () => {
   assert.equal(root.iconSource("file:///icons/app.svg"), "file:///icons/app.svg");
   assert.equal(root.iconSource("image://icon/kitty"), "image://icon/kitty");
   assert.equal(root.iconSource("kitty"), "image://icon/kitty");
+});
+
+test("only h/l and Tab navigate, with modifiers still held", () => {
+  const root = openedSwitcher();
+  root.handleKey(QT.Key_L, QT.MetaModifier);
+  assert.equal(root.selectedIndex, 2);
+  root.handleKey(QT.Key_H, QT.MetaModifier | QT.ShiftModifier);
+  assert.equal(root.selectedIndex, 1);
+  root.handleKey(QT.Key_Tab, QT.MetaModifier);
+  assert.equal(root.selectedIndex, 2);
+  root.handleKey(QT.Key_Tab, QT.MetaModifier | QT.ShiftModifier);
+  assert.equal(root.selectedIndex, 1);
+  assert.deepEqual(root.commands, []);
+});
+
+test("typing and removed shortcuts are consumed without performing an action", () => {
+  const root = openedSwitcher();
+  const held = root.selectedAddress;
+  for (const key of [QT.Key_A, QT.Key_Return, QT.Key_Left, QT.Key_Right,
+    QT.Key_Backspace, QT.Key_N, QT.Key_P]) {
+    assert.equal(root.handleKey(key, QT.MetaModifier | QT.ControlModifier), true);
+    assert.equal(root.selectedAddress, held);
+    assert.equal(root.opened, true);
+    assert.equal(root.activated, -1);
+  }
+  assert.equal(root.windows.length, addresses.length);
+  assert.deepEqual(root.commands, []);
+});
+
+test("capture is restored even when closing before the enter process finishes", () => {
+  const root = openedSwitcher();
+  assert.equal(root.keyboardProc.running, true);
+  assert.ok(root.keyboardProc.command[2].includes('submap("omarchy-cmdtab")'));
+  root.dismiss();
+  root.keyboardProc.running = false;
+  root.keyboardFinished(0);
+  assert.equal(root.keyboardProc.running, true);
+  assert.ok(root.keyboardProc.command[2].includes('submap("reset")'));
+  root.keyboardProc.running = false;
+  root.keyboardFinished(0);
+  assert.equal(root.keyboardApplied, false);
+  assert.equal(root.keyboardProc.running, false);
+});
+
+test("a capture process failure closes the switcher", () => {
+  const root = openedSwitcher();
+  root.keyboardProc.running = false;
+  root.keyboardFinished(1);
+  assert.equal(root.opened, false);
+  assert.equal(root.keyboardProc.running, true);
+  assert.ok(root.keyboardProc.command[2].includes('submap("reset")'));
+  root.keyboardProc.running = false;
+  root.keyboardFinished(0);
+  assert.equal(root.keyboardApplied, false);
 });
 
 console.log(`\n${passed} switcher tests passed`);

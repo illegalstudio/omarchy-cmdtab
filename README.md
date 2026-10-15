@@ -16,11 +16,11 @@
 </p>
 
 <p align="center">
-  <strong>Most-recently-used order &middot; One tap goes back &middot; Type to filter &middot; Every workspace at once</strong>
+  <strong>Most-recently-used order &middot; One tap goes back &middot; Vim navigation &middot; Every workspace at once</strong>
 </p>
 
 <p align="center">
-  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Type a few letters while holding SUPER to find a window on any workspace.
+  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Use h and l to move through the icons while holding SUPER.
 </p>
 
 <p align="center">
@@ -39,40 +39,18 @@ omarchy plugin add https://github.com/illegalstudio/omarchy-cmdtab.git --enable
 
 ### 2. Bind it
 
-The overlay has no keybinding of its own. Add one in `~/.config/hypr/bindings.lua`:
+Load the bundled Hyprland bindings from `~/.config/hypr/bindings.lua`:
 
 ```lua
--- SUPER+TAB is bound to "Next workspace" by default, SUPER+SHIFT+TAB to
--- "Previous workspace", so unbind both before taking them over.
-hl.unbind("SUPER + TAB")
-hl.unbind("SUPER + SHIFT + TAB")
-o.bind("SUPER + TAB", "Window switcher", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle 1")
-o.bind("SUPER + SHIFT + TAB", "Window switcher (backwards)", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle -1")
-
--- SUPER+ESCAPE normally opens the system menu. While switching, cancel instead.
-hl.unbind("SUPER + ESCAPE")
-o.bind("SUPER + ESCAPE", "Cancel window switcher or open system menu", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cancelOrMenu ''")
-
--- Catch quick releases even before the overlay has acquired keyboard focus.
--- ignore_mods also covers releasing SUPER while SHIFT is still held.
-for _, key in ipairs({ "Super_L", "Super_R" }) do
-  o.bind(key, nil, "omarchy-shell shell call illegalstudio.omarchy-cmdtab release super",
-    { release = true, locked = true, ignore_mods = true, non_consuming = true })
-end
+dofile((os.getenv("XDG_CONFIG_HOME") or os.getenv("HOME") .. "/.config")
+  .. "/omarchy/plugins/illegalstudio.omarchy-cmdtab/hyprland.lua")("SUPER")
 ```
 
-Hyprland reloads on save. Bind `cycle`, not `shell toggle`: `cycle` opens the overlay when it is closed and moves the highlight when it is already open, which is what makes holding SUPER and tapping TAB repeatedly walk down the list instead of closing it again.
+This replaces the default SUPER+TAB and SUPER+SHIFT+TAB workspace bindings. The bundled configuration creates a dedicated `omarchy-cmdtab` submap and enters it before launching the overlay. While switching, h, l, Escape, Tab and modifier release belong to Cmdtab; unused keys are consumed. Normal Omarchy shortcuts resume when the switcher closes.
 
-If you already use SUPER+H/L to focus neighboring windows, route those bindings through the plugin so they navigate the switcher while it is open and keep directional focus while it is closed:
+Remove the old Cmdtab binding block if upgrading, including the former global `cancelOrMenu`, `vimNavigate`, and modifier-release bindings. Keep your usual SUPER+H/L and SUPER+ESCAPE bindings: they no longer need to call the plugin and are isolated while Cmdtab is open.
 
-```lua
-hl.unbind("SUPER + H")
-hl.unbind("SUPER + L")
-o.bind("SUPER + H", "Previous switcher icon or focus left", "omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate h")
-o.bind("SUPER + L", "Next switcher icon or focus right", "omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate l")
-```
-
-For ALT+TAB, unbind Omarchy's existing `ALT + TAB` and `ALT + SHIFT + TAB` bindings, use `cycle "1 alt"` and `cycle "-1 alt"`, and replace the release bindings with `Alt_L`/`Alt_R` calling `release alt`. The modifier argument ensures releasing an unrelated modifier does not confirm the selection.
+For ALT+TAB, pass `"ALT"` instead of `"SUPER"` to the same function. Modifier-release handling is configured automatically.
 
 ## Remove
 
@@ -81,29 +59,26 @@ omarchy plugin disable illegalstudio.omarchy-cmdtab
 omarchy plugin remove illegalstudio.omarchy-cmdtab
 ```
 
-Then delete the bindings from `~/.config/hypr/bindings.lua`. The `hl.unbind` lines are what suppress the Omarchy defaults, so removing the switcher block restores next and previous workspace.
+Then remove the `dofile` call from `~/.config/hypr/bindings.lua` and reload Hyprland to restore its default shortcuts.
 
 ## Using the switcher
 
 Windows appear in a compact horizontal strip with large application icons, a rounded translucent background, and a highlight around the selection. Only the selected icon shows its application name beneath it. The strip scrolls when there are more windows than fit on screen.
 
-Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards. Enter remains available as an alternative.
+Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards; h and l move left and right.
 
-Typing filters by window title, application name, class, and workspace. Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
+Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
 
-Clicking an icon activates it. The mouse only takes over the highlight once the pointer actually moves, so a resting cursor never overrides the keyboard selection.
+The switcher only supports keyboard selection and cancellation. It has no text search, mouse selection, arrow-key navigation, or Enter shortcut. Unused keys are swallowed while the overlay is open.
 
 ## Keyboard controls
 
 | Key | Action |
 | --- | --- |
 | Release `SUPER` | Focus and raise the selected window. |
-| `l`, `Tab`, `→`, `↓`, `Ctrl+N` | Next window, further back in time. |
-| `h`, `Shift+Tab`, `←`, `↑`, `Ctrl+P` | Previous window. |
-| Other characters | Filter by title, application, or workspace. Lowercase `h` and `l` are reserved for navigation. |
-| `Backspace`, `Ctrl+Backspace`, `Ctrl+U` | Delete a character, a word, or the whole filter. |
-| `Enter` | Focus and raise the selected window. |
-| `Esc`, `SUPER+Esc` | Cancel and close the switcher. Outside the switcher, `SUPER+Esc` opens the system menu. |
+| `l`, `Tab` | Next window, further back in time. |
+| `h`, `Shift+Tab` | Previous window. |
+| `Esc` (also with SUPER held) | Cancel and close the switcher. |
 
 ## How the order is decided
 
@@ -116,6 +91,7 @@ Hyprland builds that predate `focusHistoryID` still work: the list falls back to
 ## Requirements
 
 - Omarchy 4 or newer with the current shell plugin system.
+- Hyprland Lua configuration with `hl.define_submap` support.
 - A Hyprland that reports `focusHistoryID` in `hyprctl -j clients`; check with
   `hyprctl -j clients | grep -m1 focusHistoryID`. Developed against 0.56. Builds
   without it still list every window, just not in recency order.
@@ -132,12 +108,13 @@ omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle -1
 omarchy-shell shell call illegalstudio.omarchy-cmdtab release super
 omarchy-shell shell call illegalstudio.omarchy-cmdtab confirm ""
 omarchy-shell shell call illegalstudio.omarchy-cmdtab dismiss ""
-omarchy-shell shell call illegalstudio.omarchy-cmdtab cancelOrMenu ""
+omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate h
+omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate l
 ```
 
-`cycle` opens the switcher or moves the highlight by the given step. An optional `alt` argument, for example `cycle "1 alt"`, selects ALT release instead of SUPER release. `release` confirms only when its modifier matches. `confirm` does what Enter does and answers `closed` when the overlay is not up. A release received during the initial client query waits for the results before activating, so quick taps work too.
+`cycle` opens the switcher or moves the highlight by the given step. An optional `alt` argument, for example `cycle "1 alt"`, selects ALT release instead of SUPER release. `release` confirms only when its modifier matches. `confirm` activates the current selection and answers `closed` when the overlay is not up. A release received during the initial client query waits for the results before activating, so quick taps work too.
 
-`cancelOrMenu` cancels an open switcher, or toggles Omarchy's system menu when the switcher is closed. Bind `SUPER+ESCAPE` to this method so the compositor does not open the menu while SUPER is still held during switching.
+`vimNavigate` accepts h or l and only moves the selection while the overlay is open. Closing the overlay restores the default Hyprland submap; Escape and modifier release also reset it directly in the compositor so they still work if shell IPC fails.
 
 ## Development install
 
@@ -154,13 +131,13 @@ Validate the manifest and run the test suite with:
 make check
 ```
 
-The tests extract the overlay's pure functions from `Cmdtab.qml` and run them under node against a recorded `hyprctl clients` payload, so they exercise the shipped code rather than a copy of it.
+The tests extract the overlay's pure functions from `Cmdtab.qml` and run them under Node against a recorded `hyprctl clients` payload. Lua tests load the actual `hyprland.lua` and verify scoped bindings, key consumption, and entry/exit ordering. Development checks require Node, Lua, Python, and Omarchy.
 
 `keepLoaded` plugins are instantiated once and kept, so editing the QML is not picked up by the shell's hot reload. Apply changes with `omarchy restart shell`.
 
 ## Safety
 
-The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to focus the window you picked. The `cancelOrMenu` method also runs `omarchy-menu toggle system` when the switcher is closed to preserve the default system-menu shortcut. Commands are passed as fixed argument arrays, never through a shell. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup. The plugin writes no files.
+The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup. The plugin writes no files.
 
 ## License
 
