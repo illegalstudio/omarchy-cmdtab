@@ -14,6 +14,8 @@ validate:
 test:
 	@$(NODE) tests/switcher.test.js
 	@$(LUA) tests/hyprland.test.lua
+	@bash -n scripts/release.sh
+	@$(PYTHON) tests/release.test.py
 
 release:
 	@scripts/release.sh

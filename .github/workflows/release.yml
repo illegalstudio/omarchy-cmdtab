@@ -26,6 +26,10 @@ jobs:
           TAG_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          if [[ ! "$TAG_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Tag $TAG_NAME is not a valid semantic version" >&2
+            exit 1
+          fi
           tag_version="${TAG_NAME#v}"
           manifest_version="$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')"
           if [ "$tag_version" != "$manifest_version" ]; then
@@ -41,8 +45,7 @@ jobs:
       - name: Test
         run: |
           python3 -m json.tool manifest.json >/dev/null
-          node tests/switcher.test.js
-          lua5.4 tests/hyprland.test.lua
+          make test LUA=lua5.4
 
       - name: Publish GitHub Release
         env:

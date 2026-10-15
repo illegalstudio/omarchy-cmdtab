@@ -135,6 +135,20 @@ The tests extract the overlay's pure functions from `Cmdtab.qml` and run them un
 
 `keepLoaded` plugins are instantiated once and kept, so editing the QML is not picked up by the shell's hot reload. Apply changes with `omarchy restart shell`.
 
+## Release
+
+From a clean checkout synchronized with its tracked branch on `origin`, run:
+
+```bash
+make release
+```
+
+The script reads local and remote semantic version tags, proposes the next patch version, and lets you choose another `MAJOR.MINOR.PATCH` version. For the first release, it proposes the version already in `manifest.json`.
+
+Before changing anything, it shows the manifest update, tag, branch, checks, commit, and publication plan and asks for confirmation. Cancelling leaves the checkout and remote unchanged.
+
+After confirmation it updates the manifest if needed, runs `make check`, creates the release commit and an annotated tag, and pushes the tracked branch and tag atomically. GitHub Actions validates the tag and manifest, runs the tests, and creates the GitHub Release with generated notes. If the push fails, the local commit and tag are preserved for recovery.
+
 ## Safety
 
 The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup. The plugin writes no files.
