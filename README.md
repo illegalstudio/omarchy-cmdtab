@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Tap SUPER+TAB and press Enter to land back on the window you just came from, hold SUPER and keep tapping TAB to go further back, or type a few letters to jump straight to a window on any workspace.
+  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Type a few letters while holding SUPER to find a window on any workspace.
 </p>
 
 <p align="center">
@@ -48,11 +48,31 @@ hl.unbind("SUPER + TAB")
 hl.unbind("SUPER + SHIFT + TAB")
 o.bind("SUPER + TAB", "Window switcher", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle 1")
 o.bind("SUPER + SHIFT + TAB", "Window switcher (backwards)", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle -1")
+
+-- SUPER+ESCAPE normally opens the system menu. While switching, cancel instead.
+hl.unbind("SUPER + ESCAPE")
+o.bind("SUPER + ESCAPE", "Cancel window switcher or open system menu", "omarchy-shell shell call illegalstudio.omarchy-cmdtab cancelOrMenu ''")
+
+-- Catch quick releases even before the overlay has acquired keyboard focus.
+-- ignore_mods also covers releasing SUPER while SHIFT is still held.
+for _, key in ipairs({ "Super_L", "Super_R" }) do
+  o.bind(key, nil, "omarchy-shell shell call illegalstudio.omarchy-cmdtab release super",
+    { release = true, locked = true, ignore_mods = true, non_consuming = true })
+end
 ```
 
 Hyprland reloads on save. Bind `cycle`, not `shell toggle`: `cycle` opens the overlay when it is closed and moves the highlight when it is already open, which is what makes holding SUPER and tapping TAB repeatedly walk down the list instead of closing it again.
 
-Any pair of keys works. On a keyboard where ALT is where a Mac's CMD would be, `ALT + TAB` and `ALT + SHIFT + TAB` are the closer match, and are bound by Omarchy to `cycle_next` by default.
+If you already use SUPER+H/L to focus neighboring windows, route those bindings through the plugin so they navigate the switcher while it is open and keep directional focus while it is closed:
+
+```lua
+hl.unbind("SUPER + H")
+hl.unbind("SUPER + L")
+o.bind("SUPER + H", "Previous switcher icon or focus left", "omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate h")
+o.bind("SUPER + L", "Next switcher icon or focus right", "omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate l")
+```
+
+For ALT+TAB, unbind Omarchy's existing `ALT + TAB` and `ALT + SHIFT + TAB` bindings, use `cycle "1 alt"` and `cycle "-1 alt"`, and replace the release bindings with `Alt_L`/`Alt_R` calling `release alt`. The modifier argument ensures releasing an unrelated modifier does not confirm the selection.
 
 ## Remove
 
@@ -61,26 +81,29 @@ omarchy plugin disable illegalstudio.omarchy-cmdtab
 omarchy plugin remove illegalstudio.omarchy-cmdtab
 ```
 
-Then delete the bindings from `~/.config/hypr/bindings.lua`. The `hl.unbind` lines are what suppress the Omarchy defaults, so removing all four restores next and previous workspace.
+Then delete the bindings from `~/.config/hypr/bindings.lua`. The `hl.unbind` lines are what suppress the Omarchy defaults, so removing the switcher block restores next and previous workspace.
 
 ## Using the switcher
 
-Windows are listed most recently used first: row 0 is the window you are on, row 1 the one before it, and so on across every workspace. Opening the switcher highlights row 1, so **SUPER+TAB then Enter** goes back to the window you last used, and doing it again returns you where you were. Holding SUPER and tapping TAB again moves one row further back for each tap.
+Windows appear in a compact horizontal strip with large application icons, a rounded translucent background, and a highlight around the selection. Only the selected icon shows its application name beneath it. The strip scrolls when there are more windows than fit on screen.
 
-Each row shows the window title, its application class, and the workspace it lives on. Typing filters on all three at once, so `slack`, `inbox`, or `3` all narrow the list, and the most recently used match is highlighted first. Activating a window focuses it on whichever workspace it is on, switching workspace if needed.
+Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards. Enter remains available as an alternative.
 
-Clicking a row activates it. The mouse only takes over the highlight once the pointer actually moves over the overlay, so opening it under a resting cursor, or scrolling rows underneath one, never overrides what you selected with the keyboard.
+Typing filters by window title, application name, class, and workspace. Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
+
+Clicking an icon activates it. The mouse only takes over the highlight once the pointer actually moves, so a resting cursor never overrides the keyboard selection.
 
 ## Keyboard controls
 
 | Key | Action |
 | --- | --- |
-| `Tab`, `↓`, `Ctrl+N` | Next window, further back in time. |
-| `Shift+Tab`, `↑`, `Ctrl+P` | Previous window. |
-| Any character | Filter by title, application, or workspace. |
+| Release `SUPER` | Focus and raise the selected window. |
+| `l`, `Tab`, `→`, `↓`, `Ctrl+N` | Next window, further back in time. |
+| `h`, `Shift+Tab`, `←`, `↑`, `Ctrl+P` | Previous window. |
+| Other characters | Filter by title, application, or workspace. Lowercase `h` and `l` are reserved for navigation. |
 | `Backspace`, `Ctrl+Backspace`, `Ctrl+U` | Delete a character, a word, or the whole filter. |
-| `Enter` | Focus the highlighted window. |
-| `Esc` | Clear the filter, or close the switcher when it is empty. |
+| `Enter` | Focus and raise the selected window. |
+| `Esc`, `SUPER+Esc` | Cancel and close the switcher. Outside the switcher, `SUPER+Esc` opens the system menu. |
 
 ## How the order is decided
 
@@ -99,18 +122,22 @@ Hyprland builds that predate `focusHistoryID` still work: the list falls back to
 
 ## Configuration
 
-None. The overlay reads its colours, fonts, corner radius, and borders from the active Omarchy theme, so it follows whatever `omarchy theme set` you are running.
+The overlay uses the active Omarchy theme for its background, with a rounded macOS-style horizontal layout showing icons and the selected application's name. No configuration is required beyond the keybindings.
 
 ## IPC
 
 ```bash
 omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle 1
 omarchy-shell shell call illegalstudio.omarchy-cmdtab cycle -1
+omarchy-shell shell call illegalstudio.omarchy-cmdtab release super
 omarchy-shell shell call illegalstudio.omarchy-cmdtab confirm ""
 omarchy-shell shell call illegalstudio.omarchy-cmdtab dismiss ""
+omarchy-shell shell call illegalstudio.omarchy-cmdtab cancelOrMenu ""
 ```
 
-`cycle` opens the switcher or moves the highlight by the given step. `confirm` does what Enter does and answers `closed` when the overlay is not up. These are what the keybindings call, and what the tests drive.
+`cycle` opens the switcher or moves the highlight by the given step. An optional `alt` argument, for example `cycle "1 alt"`, selects ALT release instead of SUPER release. `release` confirms only when its modifier matches. `confirm` does what Enter does and answers `closed` when the overlay is not up. A release received during the initial client query waits for the results before activating, so quick taps work too.
+
+`cancelOrMenu` cancels an open switcher, or toggles Omarchy's system menu when the switcher is closed. Bind `SUPER+ESCAPE` to this method so the compositor does not open the menu while SUPER is still held during switching.
 
 ## Development install
 
@@ -133,7 +160,7 @@ The tests extract the overlay's pure functions from `Cmdtab.qml` and run them un
 
 ## Safety
 
-The overlay only ever runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to focus the window you picked. Arguments are passed as a fixed array, never through a shell, and the only value that varies is a window address that came from Hyprland itself in the same breath. It writes nothing, and reads nothing outside the compositor.
+The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to focus the window you picked. The `cancelOrMenu` method also runs `omarchy-menu toggle system` when the switcher is closed to preserve the default system-menu shortcut. Commands are passed as fixed argument arrays, never through a shell. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup. The plugin writes no files.
 
 ## License
 

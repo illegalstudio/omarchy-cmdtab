@@ -19,6 +19,7 @@ const EXTRACTED = [
   "loadClients", "rowIndexOf", "rebuildDisplay", "setFilter", "selectIndex",
   "moveSelection", "notePointer", "cycle", "open", "toggle", "dismiss",
   "close", "confirm",
+  "release", "cancelOrMenu", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate",
 ];
 
 function extract(name) {
@@ -32,18 +33,19 @@ function extract(name) {
   throw new Error(`unbalanced braces in ${name}`);
 }
 
-const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "ListView", `
+const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "ListView",
+  "DesktopEntries", "Quickshell", "Util", `
   const root = {
     opened: false, loading: false, filterText: "", selectedIndex: 0, windows: [],
     activeAddress: "", selectedAddress: "", pendingInitial: false, initialStep: 1,
     pointerEngaged: false, pointerPrimed: false, pointerX: -1, pointerY: -1,
-    appLibrary: null, shell: null, manifest: null, activated: -1,
-    iconForClass(appClass) { return "icon:" + appClass; },
+    desktopEntries: [], shell: null, manifest: null, activated: -1,
+    holdModifier: "super", confirmOnLoad: false, runActivation: false,
     refresh() { root.refreshes = (root.refreshes || 0) + 1; },
-    activate(index) { root.activated = index; },
+    activate(index) { root.activated = index; if (root.runActivation) activate(index); },
   };
   ${EXTRACTED.map(extract).join("\n\n")}
-  ${EXTRACTED.map((name) => `root.${name} = ${name};`).join("\n")}
+  ${EXTRACTED.filter((name) => name !== "activate").map((name) => `root.${name} = ${name};`).join("\n")}
   return root;
 `);
 
@@ -55,12 +57,19 @@ function makeRoot() {
     get(index) { return this.rows[index]; },
     get count() { return this.rows.length; },
   };
-  return build(
+  const commands = [];
+  const root = build(
     displayModel,
     { positionViewAtIndex() {} },
     { forceActiveFocus() {} },
     { callLater(fn) { fn(); } },
-    { Contain: 0 });
+    { Contain: 0 },
+    { heuristicLookup() { return null; } },
+    { execDetached(command) { commands.push(command); },
+      iconPath(icon) { return "image://icon/" + icon; } },
+    { fileUrl(file) { return "file://" + file; } });
+  root.commands = commands;
+  return root;
 }
 
 // Most-recently-used order the overlay is expected to produce: every mapped
@@ -151,6 +160,41 @@ test("the selection wraps in both directions", () => {
   assert.equal(root.selectedIndex, 0);
   root.moveSelection(-(count + 3));
   assert.ok(root.selectedIndex >= 0 && root.selectedIndex < count);
+});
+
+test("Vim h/l navigate and wrap without editing the filter or changing window focus", () => {
+  const root = openedSwitcher();
+  assert.equal(root.vimNavigate("h"), "ok");
+  assert.equal(root.selectedIndex, 0);
+  root.vimNavigate("h");
+  assert.equal(root.selectedIndex, addresses.length - 1);
+  root.vimNavigate("l");
+  assert.equal(root.selectedIndex, 0);
+  assert.equal(root.filterText, "");
+  assert.deepEqual(root.commands, []);
+});
+
+test("Vim navigation during loading is applied after clients arrive", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  root.cycle("1");
+  root.vimNavigate("l");
+  root.vimNavigate("l");
+  root.vimNavigate("h");
+  root.loadClients(fixture);
+  assert.equal(root.selectedIndex, 2);
+});
+
+test("Vim bindings preserve directional focus when the switcher is closed", () => {
+  const root = makeRoot();
+  assert.equal(root.vimNavigate("h"), "focus");
+  assert.equal(root.vimNavigate("l"), "focus");
+  assert.deepEqual(root.commands, [
+    ["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({ direction = "l" }))'],
+    ["hyprctl", "eval", 'hl.dispatch(hl.dsp.focus({ direction = "r" }))'],
+  ]);
+  assert.equal(root.vimNavigate("other"), "ignored");
+  assert.equal(root.commands.length, 2);
 });
 
 test("filtering jumps to the most recently used match", () => {
@@ -255,6 +299,171 @@ test("confirm activates the highlighted row, and only when open", () => {
   const root = openedSwitcher(1);
   assert.equal(root.confirm(), "ok");
   assert.equal(root.activated, 1);
+});
+
+test("releasing SUPER activates the selection without Enter", () => {
+  const root = openedSwitcher();
+  assert.equal(root.release("alt"), "ignored");
+  assert.equal(root.activated, -1);
+  assert.equal(root.release("super"), "ok");
+  assert.equal(root.activated, 1);
+  root.dismiss();
+  assert.equal(root.release("super"), "closed");
+});
+
+test("ALT bindings activate only when ALT is released", () => {
+  const root = makeRoot();
+  root.cycle("1 alt");
+  root.loadClients(fixture);
+  assert.equal(root.release("super"), "ignored");
+  assert.equal(root.release("alt"), "ok");
+  assert.equal(root.activated, 0);
+});
+
+test("a quick tap waits for the initial client query before activating", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  root.cycle("1");
+  assert.equal(root.release("super"), "pending");
+  assert.equal(root.activated, -1);
+  root.loadClients(fixture);
+  assert.equal(root.activated, 1);
+});
+
+test("extra Tab presses during loading are counted", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  root.cycle("1");
+  root.cycle("1");
+  root.cycle("1");
+  root.cycle("-1");
+  root.loadClients(fixture);
+  assert.equal(root.selectedIndex, 2);
+});
+
+test("opening never activates rows left over from the previous invocation", () => {
+  const root = openedSwitcher();
+  root.dismiss();
+  root.cycle("1");
+  root.release("super");
+  assert.equal(root.activated, -1);
+  root.loadClients("[]");
+  assert.equal(root.opened, false);
+});
+
+test("cancelling during loading prevents delayed activation", () => {
+  const root = makeRoot();
+  root.cycle("1");
+  root.release("super");
+  root.dismiss();
+  root.loadClients(fixture);
+  assert.equal(root.activated, -1);
+});
+
+test("SUPER+ESCAPE cancels the switcher without opening the system menu", () => {
+  const root = openedSwitcher();
+  root.setFilter("obsidian");
+  assert.equal(root.cancelOrMenu(), "cancelled");
+  assert.equal(root.opened, false);
+  assert.equal(root.release("super"), "closed");
+  assert.equal(root.activated, -1);
+  assert.deepEqual(root.commands, []);
+});
+
+test("SUPER+ESCAPE during loading cancels a pending confirmation", () => {
+  const root = makeRoot();
+  root.cycle("1");
+  root.release("super");
+  assert.equal(root.cancelOrMenu(), "cancelled");
+  root.loadClients(fixture);
+  assert.equal(root.opened, false);
+  assert.equal(root.activated, -1);
+  assert.deepEqual(root.commands, []);
+});
+
+test("SUPER+ESCAPE keeps the system-menu shortcut when the switcher is closed", () => {
+  const root = makeRoot();
+  assert.equal(root.cancelOrMenu(), "menu");
+  assert.deepEqual(root.commands, [["omarchy-menu", "toggle", "system"]]);
+});
+
+test("filtering before clients arrive still waits for the query on release", () => {
+  const root = makeRoot();
+  root.cycle("1");
+  root.setFilter("obsidian");
+  assert.equal(root.release("super"), "pending");
+  assert.equal(root.opened, true);
+  root.loadClients(fixture);
+  assert.equal(root.selectedAddress, "0x1003");
+  assert.equal(root.activated, 0);
+});
+
+test("malformed client payloads produce an empty result instead of throwing", () => {
+  for (const payload of ['null', '{}', '[null]']) {
+    const root = openedSwitcher(1, payload);
+    assert.equal(root.windows.length, 0);
+    assert.equal(root.pendingInitial, false);
+    assert.equal(root.confirm(), "empty");
+  }
+});
+
+test("activation focuses and raises the chosen window, including floating clients", () => {
+  const root = openedSwitcher();
+  root.runActivation = true;
+  root.confirm();
+  assert.equal(root.opened, false);
+  assert.equal(root.commands.length, 1);
+  assert.equal(root.commands[0][0], "hyprctl");
+  const lua = root.commands[0][2];
+  assert.ok(lua.includes('address:' + addresses[1]));
+  assert.ok(lua.indexOf("hl.dsp.focus") < lua.indexOf("hl.dsp.window.bring_to_top"));
+});
+
+test("desktop icons resolve without the shell's menu-only application library", () => {
+  const root = makeRoot();
+  root.desktopEntries = [
+    { id: "org.gnome.Nautilus", name: "Files", icon: "org.gnome.Nautilus" },
+    { id: "obsidian", name: "Obsidian", icon: "obsidian" },
+    { id: "some-editor", name: "Editor", startupClass: "editor-class", icon: "editor" },
+  ];
+  assert.equal(root.applicationFor({ class: "org.gnome.Nautilus" }).name, "Files");
+  assert.equal(root.applicationFor({ class: "md.obsidian.Obsidian", initialClass: "obsidian" }).icon, "obsidian");
+  assert.equal(root.applicationFor({ class: "editor-class" }).icon, "editor");
+});
+
+test("Brave and Chrome webapps retain dedicated icons and names", () => {
+  const root = makeRoot();
+  root.desktopEntries = [
+    { id: "brave-browser", name: "Brave", icon: "brave-browser" },
+    { id: "Telegram", name: "Telegram", icon: "telegram", execString: 'omarchy-launch-webapp "https://web.telegram.org/k/"' },
+    { id: "WhatsApp", name: "WhatsApp", icon: "/icons/WhatsApp.png", execString: 'omarchy-launch-webapp "https://web.whatsapp.com/"' },
+    { id: "Todoist", name: "Todoist", icon: "todoist", execString: 'omarchy-launch-webapp "https://app.todoist.com/app/today"' },
+    { id: "InstalledPWA", name: "PWA", icon: "pwa", startupClass: "chrome-abcdef-Default" },
+  ];
+  for (const browser of ["brave", "chrome", "chromium", "msedge"]) {
+    assert.equal(root.applicationFor({ class: browser + "-web.telegram.org__k_-Default" }).icon, "telegram");
+    assert.equal(root.applicationFor({ class: browser + "-app.todoist.com__app_today-Profile_1" }).name, "Todoist");
+  }
+  assert.equal(root.applicationFor({ class: "brave-web.whatsapp.com__-Default" }).icon, "/icons/WhatsApp.png");
+  assert.equal(root.applicationFor({ class: "chrome-abcdef-Default" }).icon, "pwa");
+});
+
+test("webapps sharing a host prefer their matching path regardless of entry order", () => {
+  const root = makeRoot();
+  root.desktopEntries = [
+    { id: "Home", name: "Home", icon: "home", execString: "browser --app=https://example.com/" },
+    { id: "Mail", name: "Mail", icon: "mail", execString: "browser --app=https://example.com/mail/" },
+  ];
+  assert.equal(root.applicationFor({ class: "brave-example.com__mail_-Default" }).icon, "mail");
+  assert.notEqual(root.applicationFor({ class: "brave-evil-example.com__mail_-Default" }).icon, "mail");
+});
+
+test("icon sources preserve absolute paths and existing URLs", () => {
+  const root = makeRoot();
+  assert.equal(root.iconSource("/icons/My App.png"), "file:///icons/My App.png");
+  assert.equal(root.iconSource("file:///icons/app.svg"), "file:///icons/app.svg");
+  assert.equal(root.iconSource("image://icon/kitty"), "image://icon/kitty");
+  assert.equal(root.iconSource("kitty"), "image://icon/kitty");
 });
 
 console.log(`\n${passed} switcher tests passed`);
