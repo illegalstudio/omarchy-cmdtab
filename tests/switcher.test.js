@@ -19,7 +19,7 @@ const EXTRACTED = [
   "loadClients", "rowIndexOf", "rebuildDisplay", "selectIndex",
   "moveSelection", "clickIndex", "hoverIndex", "cycle", "open", "toggle", "dismiss",
   "close", "confirm",
-  "release", "endEarly", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
+  "release", "endEarly", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "findMissingIcons", "iconsFound", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
 ];
 
 function extract(name) {
@@ -34,7 +34,7 @@ function extract(name) {
 }
 
 const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "ListView",
-  "DesktopEntries", "Quickshell", "Util", "keyboardProc", `
+  "DesktopEntries", "Quickshell", "Util", "keyboardProc", "iconProc", `
   const root = {
     opened: false, loading: false, selectedIndex: 0, windows: [],
     activeAddress: "", selectedAddress: "", pendingInitial: false, initialStep: 1,
@@ -42,6 +42,7 @@ const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "Li
     holdModifier: "super", confirmOnLoad: false, runActivation: false,
     keyboardApplied: false, keyboardTarget: false, pointerPosition: null,
     session: "", closedSession: "", earlyEnd: null,
+    iconFiles: {}, iconSearched: {}, iconLookupScript: "lookup",
     refresh() { root.refreshes = (root.refreshes || 0) + 1; },
     activate(index) { root.activated = index; if (root.runActivation) activate(index); },
   };
@@ -70,6 +71,9 @@ function makeRoot() {
   };
   const commands = [];
   const keyboardProc = { running: false, command: [] };
+  const iconProc = { running: false, command: [] };
+  // Theme icons Qt resolves; anything else counts as missing from the theme.
+  const themeIcons = new Set(["kitty", "application-x-executable"]);
   const root = build(
     displayModel,
     { positionViewAtIndex() {} },
@@ -78,10 +82,12 @@ function makeRoot() {
     { Contain: 0 },
     { heuristicLookup() { return null; } },
     { execDetached(command) { commands.push(command); },
-      iconPath(icon) { return "image://icon/" + icon; } },
-    { fileUrl(file) { return "file://" + file; } }, keyboardProc);
+      iconPath(icon) { return themeIcons.has(icon) ? "image://icon/" + icon : ""; } },
+    { fileUrl(file) { return "file://" + file; } }, keyboardProc, iconProc);
   root.commands = commands;
   root.keyboardProc = keyboardProc;
+  root.iconProc = iconProc;
+  root.themeIcons = themeIcons;
   return root;
 }
 
@@ -407,6 +413,44 @@ test("icon sources preserve absolute paths and existing URLs", () => {
   assert.equal(root.iconSource("/icons/My App.png"), "file:///icons/My App.png");
   assert.equal(root.iconSource("file:///icons/app.svg"), "file:///icons/app.svg");
   assert.equal(root.iconSource("image://icon/kitty"), "image://icon/kitty");
+  assert.equal(root.iconSource("kitty"), "image://icon/kitty");
+});
+
+test("icons Qt cannot resolve are looked up on disk once per opening", () => {
+  const root = openedSwitcher();
+  assert.equal(root.iconSource("gleaner"), "image://icon/application-x-executable");
+  root.iconProc.running = false;
+  root.findMissingIcons([{ appIcon: "kitty" }, { appIcon: "gleaner" }, { appIcon: "gleaner" },
+    { appIcon: "/icons/app.png" }, { appIcon: "-rf" }, { appIcon: "a b" }]);
+  assert.equal(root.iconProc.running, true);
+  assert.deepEqual(root.iconProc.command, ["sh", "-c", "lookup", "sh", "gleaner"]);
+
+  root.iconsFound("gleaner\t/usr/share/icons/hicolor/512x512/apps/gleaner.png\nbogus\trelative.png\n");
+  assert.equal(root.iconSource("gleaner"), "file:///usr/share/icons/hicolor/512x512/apps/gleaner.png");
+  assert.equal(root.iconFiles.bogus, undefined);
+
+  // A name already searched in this opening is not searched again, even
+  // when the disk had nothing for it.
+  root.iconProc.running = false;
+  root.iconProc.command = [];
+  root.findMissingIcons([{ appIcon: "gleaner" }, { appIcon: "missing" }]);
+  assert.deepEqual(root.iconProc.command, ["sh", "-c", "lookup", "sh", "missing"]);
+  root.iconProc.running = false;
+  root.iconProc.command = [];
+  root.findMissingIcons([{ appIcon: "missing" }]);
+  assert.equal(root.iconProc.running, false);
+
+  // The next opening retries names that were missing, for apps installed
+  // while the shell runs.
+  root.dismiss();
+  root.cycle("1");
+  root.findMissingIcons([{ appIcon: "missing" }]);
+  assert.deepEqual(root.iconProc.command, ["sh", "-c", "lookup", "sh", "missing"]);
+});
+
+test("the theme keeps priority over icons found on disk", () => {
+  const root = makeRoot();
+  root.iconsFound("kitty\t/opt/kitty.png\n");
   assert.equal(root.iconSource("kitty"), "image://icon/kitty");
 });
 

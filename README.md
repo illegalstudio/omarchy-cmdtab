@@ -67,7 +67,7 @@ Windows appear in a compact horizontal strip with large application icons, a rou
 
 Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards; h and l, or the left and right arrows, move left and right. Moving the mouse over an icon selects it the same way; a pointer that stays still never changes the selection. Enter or a click on an icon switches to that window immediately.
 
-Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
+Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. An app installed while the shell is running gets its icon the next time the switcher opens, without restarting the shell: names the Qt icon theme does not resolve are looked up directly in the hicolor and pixmaps directories. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
 
 The switcher has no text search. Unused keys are swallowed while the overlay is open.
 
@@ -158,7 +158,7 @@ After confirmation it updates the manifest if needed, runs `make check`, creates
 
 ## Safety
 
-The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup. The plugin writes no files.
+The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup; for icon names that lookup misses, it runs a fixed `sh` script that only tests for files under the XDG data directories, with the names passed as arguments. The plugin writes no files.
 
 ## License
 

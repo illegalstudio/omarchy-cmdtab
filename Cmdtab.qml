@@ -37,6 +37,31 @@ Item {
   property string session: ""
   property string closedSession: ""
   property var earlyEnd: null
+  // Qt remembers every icon name it failed to find for the life of the shell
+  // process, and keeps the icon-theme.cache it read at startup, so an app
+  // installed after the shell started would show no icon until a restart.
+  // Names the theme misses are looked up on disk instead, once per opening.
+  property var iconFiles: ({})
+  property var iconSearched: ({})
+  readonly property string iconLookupScript: [
+    'IFS=:',
+    'dirs="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"',
+    'lookup() {',
+    '  for base in $dirs; do',
+    '    for size in scalable 512x512 256x256@2 256x256 192x192 128x128 96x96 64x64 48x48 32x32; do',
+    '      for ext in svg png; do',
+    '        file="$base/icons/hicolor/$size/apps/$1.$ext"',
+    '        if [ -f "$file" ]; then printf "%s\\t%s\\n" "$1" "$file"; return; fi',
+    '      done',
+    '    done',
+    '    for ext in svg png; do',
+    '      file="$base/pixmaps/$1.$ext"',
+    '      if [ -f "$file" ]; then printf "%s\\t%s\\n" "$1" "$file"; return; fi',
+    '    done',
+    '  done',
+    '}',
+    'for name do lookup "$name"; done'
+  ].join("\n")
 
   property color background: Color.menu.background
   readonly property bool darkBackground: background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
@@ -71,6 +96,7 @@ Item {
     root.selectedIndex = 0
     root.selectedAddress = ""
     root.pointerPosition = null
+    root.iconSearched = ({})
     displayModel.clear()
     root.initialStep = step
     root.holdModifier = payload && payload.modifier === "alt" ? "alt" : "super"
@@ -237,6 +263,7 @@ Item {
       })
     }
     root.windows = next
+    root.findMissingIcons(next)
     root.rebuildDisplay(root.pendingInitial ? "initial" : "restore")
     root.loading = false
     if (root.opened && root.confirmOnLoad) root.confirm()
@@ -296,7 +323,42 @@ Item {
     var value = String(icon || "")
     if (value.indexOf("file:") === 0 || value.indexOf("image:") === 0) return value
     if (value.charAt(0) === "/") return Util.fileUrl(value)
-    return Quickshell.iconPath(value, true) || Quickshell.iconPath("application-x-executable", true)
+    var file = root.iconFiles[value]
+    return Quickshell.iconPath(value, true) || (file ? Util.fileUrl(file) : "")
+      || Quickshell.iconPath("application-x-executable", true)
+  }
+
+  // Start an on-disk lookup for the theme icon names Qt cannot resolve.
+  function findMissingIcons(rows) {
+    if (iconProc.running) return
+    var names = []
+    for (var i = 0; i < rows.length; i++) {
+      var name = String(rows[i].appIcon || "")
+      if (!/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(name)) continue
+      if (root.iconFiles[name] || root.iconSearched[name] || names.indexOf(name) >= 0) continue
+      if (Quickshell.iconPath(name, true)) continue
+      names.push(name)
+    }
+    if (!names.length) return
+    var searched = Object.assign({}, root.iconSearched)
+    for (var j = 0; j < names.length; j++) searched[names[j]] = true
+    root.iconSearched = searched
+    iconProc.command = ["sh", "-c", root.iconLookupScript, "sh"].concat(names)
+    iconProc.running = true
+  }
+
+  // Each output line is "name<TAB>path" for an icon found on disk.
+  function iconsFound(text) {
+    var files = Object.assign({}, root.iconFiles)
+    var found = false
+    var lines = String(text || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var tab = lines[i].indexOf("\t")
+      if (tab <= 0 || lines[i].charAt(tab + 1) !== "/") continue
+      files[lines[i].slice(0, tab)] = lines[i].slice(tab + 1)
+      found = true
+    }
+    if (found) root.iconFiles = files
   }
 
   function rowIndexOf(address) {
@@ -424,6 +486,14 @@ Item {
       onStreamFinished: root.loadClients(text)
     }
     onExited: root.loading = false
+  }
+
+  Process {
+    id: iconProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.iconsFound(text)
+    }
   }
 
   Timer {
