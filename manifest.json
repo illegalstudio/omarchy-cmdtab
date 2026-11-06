@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "illegalstudio.omarchy-cmdtab",
   "name": "Cmdtab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "illegalstudio",
   "license": "MIT",
   "description": "macOS Cmd+Tab for Hyprland: switch windows in most-recently-used order from an Omarchy shell overlay.",
