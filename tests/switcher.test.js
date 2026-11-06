@@ -17,9 +17,9 @@ const fixture = fs.readFileSync(
 // Quickshell, or the scene graph. Those are stubbed on the fake root below.
 const EXTRACTED = [
   "loadClients", "rowIndexOf", "rebuildDisplay", "selectIndex",
-  "moveSelection", "cycle", "open", "toggle", "dismiss",
+  "moveSelection", "clickIndex", "hoverIndex", "cycle", "open", "toggle", "dismiss",
   "close", "confirm",
-  "release", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
+  "release", "endEarly", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
 ];
 
 function extract(name) {
@@ -40,7 +40,8 @@ const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "Li
     activeAddress: "", selectedAddress: "", pendingInitial: false, initialStep: 1,
     desktopEntries: [], shell: null, manifest: null, activated: -1,
     holdModifier: "super", confirmOnLoad: false, runActivation: false,
-    keyboardApplied: false, keyboardTarget: false,
+    keyboardApplied: false, keyboardTarget: false, pointerPosition: null,
+    session: "", closedSession: "", earlyEnd: null,
     refresh() { root.refreshes = (root.refreshes || 0) + 1; },
     activate(index) { root.activated = index; if (root.runActivation) activate(index); },
   };
@@ -51,7 +52,7 @@ const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "Li
 
 const QT = {
   Key_Escape: 0x01000000, Key_Tab: 0x01000001, Key_Backtab: 0x01000002,
-  Key_H: 72, Key_L: 76, Key_Return: 0x01000004,
+  Key_H: 72, Key_L: 76, Key_Return: 0x01000004, Key_Enter: 0x01000005,
   Key_Left: 0x01000012, Key_Right: 0x01000014,
   Key_N: 78, Key_P: 80, Key_A: 65, Key_Backspace: 0x01000003,
   ShiftModifier: 0x02000000, ControlModifier: 0x04000000,
@@ -409,11 +410,15 @@ test("icon sources preserve absolute paths and existing URLs", () => {
   assert.equal(root.iconSource("kitty"), "image://icon/kitty");
 });
 
-test("only h/l and Tab navigate, with modifiers still held", () => {
+test("h/l, arrows and Tab navigate, with modifiers still held", () => {
   const root = openedSwitcher();
   root.handleKey(QT.Key_L, QT.MetaModifier);
   assert.equal(root.selectedIndex, 2);
   root.handleKey(QT.Key_H, QT.MetaModifier | QT.ShiftModifier);
+  assert.equal(root.selectedIndex, 1);
+  root.handleKey(QT.Key_Right, QT.MetaModifier);
+  assert.equal(root.selectedIndex, 2);
+  root.handleKey(QT.Key_Left, QT.MetaModifier);
   assert.equal(root.selectedIndex, 1);
   root.handleKey(QT.Key_Tab, QT.MetaModifier);
   assert.equal(root.selectedIndex, 2);
@@ -422,11 +427,138 @@ test("only h/l and Tab navigate, with modifiers still held", () => {
   assert.deepEqual(root.commands, []);
 });
 
-test("typing and removed shortcuts are consumed without performing an action", () => {
+test("Enter activates the current selection", () => {
+  for (const key of [QT.Key_Return, QT.Key_Enter]) {
+    const root = openedSwitcher();
+    root.handleKey(QT.Key_Right, QT.MetaModifier);
+    assert.equal(root.handleKey(key, QT.MetaModifier), true);
+    assert.equal(root.activated, 2);
+  }
+});
+
+test("Enter during loading waits for the clients before activating", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  root.cycle("1");
+  root.handleKey(QT.Key_Return, 0);
+  assert.equal(root.activated, -1);
+  root.loadClients(fixture);
+  assert.equal(root.activated, 1);
+});
+
+test("clicking an icon selects and activates that window", () => {
+  const root = openedSwitcher();
+  root.clickIndex(3);
+  assert.equal(root.selectedAddress, addresses[3]);
+  assert.equal(root.activated, 3);
+});
+
+test("clicks are ignored while loading or after closing", () => {
+  const loading = makeRoot();
+  loading.cycle("1");
+  loading.clickIndex(0);
+  assert.equal(loading.activated, -1);
+  const closed = openedSwitcher();
+  closed.dismiss();
+  closed.clickIndex(0);
+  assert.equal(closed.activated, -1);
+});
+
+test("moving the pointer over an icon selects it like the arrow keys", () => {
+  const root = openedSwitcher();
+  root.hoverIndex(3, 100, 50);
+  assert.equal(root.selectedIndex, 1, "the first position only records where the pointer is");
+  root.hoverIndex(3, 104, 50);
+  assert.equal(root.selectedAddress, addresses[3]);
+  root.hoverIndex(0, 20, 50);
+  assert.equal(root.selectedIndex, 0);
+  root.handleKey(QT.Key_Right, QT.MetaModifier);
+  assert.equal(root.selectedIndex, 1);
+  assert.equal(root.activated, -1);
+  assert.deepEqual(root.commands, []);
+});
+
+test("a still pointer never steals the selection", () => {
+  const root = openedSwitcher();
+  root.hoverIndex(4, 100, 50);
+  root.handleKey(QT.Key_Right, QT.MetaModifier);
+  // Scrolling the strip under a stationary cursor re-delivers the same point.
+  root.hoverIndex(3, 100, 50);
+  assert.equal(root.selectedIndex, 2);
+});
+
+test("hover state does not carry over between invocations or apply while loading", () => {
+  const root = openedSwitcher();
+  root.hoverIndex(3, 100, 50);
+  root.dismiss();
+  root.cycle("1");
+  assert.equal(root.pointerPosition, null);
+  root.hoverIndex(3, 100, 50);
+  root.hoverIndex(3, 110, 50);
+  root.loadClients(fixture);
+  assert.equal(root.selectedIndex, 1);
+});
+
+test("a modifier release that overtakes the opening cycle still switches", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  assert.equal(root.release("super 7-1"), "closed");
+  root.cycle("1 super 7-1");
+  assert.equal(root.opened, true);
+  root.loadClients(fixture);
+  assert.equal(root.activated, 1);
+});
+
+test("Enter and Escape that overtake the opening cycle are applied", () => {
+  const entered = makeRoot();
+  entered.activeAddress = ACTIVE;
+  entered.confirm("7-2");
+  entered.cycle("1 super 7-2");
+  entered.loadClients(fixture);
+  assert.equal(entered.activated, 1);
+
+  const escaped = makeRoot();
+  escaped.dismiss("7-3");
+  escaped.cycle("1 super 7-3");
+  assert.equal(escaped.opened, false);
+  escaped.loadClients(fixture);
+  assert.equal(escaped.activated, -1);
+});
+
+test("late calls of a finished gesture neither reopen nor end the next one", () => {
+  const root = openedSwitcher("1 super 8-1");
+  root.runActivation = true;
+  root.release("super 8-1");
+  assert.equal(root.opened, false);
+  // A second Tab of the same gesture arriving after the release.
+  assert.equal(root.cycle("1 super 8-1"), "ignored");
+  assert.equal(root.opened, false);
+  // A duplicate release must not be remembered for a later gesture.
+  root.release("super 8-1");
+  assert.equal(root.earlyEnd, null);
+  root.cycle("1 super 8-2");
+  assert.equal(root.opened, true);
+});
+
+test("an early end for another gesture does not close the one being opened", () => {
+  const root = makeRoot();
+  root.release("super 9-1");
+  root.cycle("1 super 9-2");
+  root.loadClients(fixture);
+  assert.equal(root.opened, true);
+  assert.equal(root.activated, -1);
+});
+
+test("the overlay's own modifier release does not need a gesture id", () => {
+  const root = openedSwitcher("1 super 10-1");
+  assert.equal(root.release("super"), "ok");
+  assert.equal(root.activated, 1);
+});
+
+test("typing and unbound shortcuts are consumed without performing an action", () => {
   const root = openedSwitcher();
   const held = root.selectedAddress;
-  for (const key of [QT.Key_A, QT.Key_Return, QT.Key_Left, QT.Key_Right,
-    QT.Key_Backspace, QT.Key_N, QT.Key_P]) {
+  for (const key of [QT.Key_A, QT.Key_Backspace, QT.Key_N, QT.Key_P]) {
     assert.equal(root.handleKey(key, QT.MetaModifier | QT.ControlModifier), true);
     assert.equal(root.selectedAddress, held);
     assert.equal(root.opened, true);

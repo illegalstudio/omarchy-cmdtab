@@ -16,11 +16,11 @@
 </p>
 
 <p align="center">
-  <strong>Most-recently-used order &middot; One tap goes back &middot; Vim navigation &middot; Every workspace at once</strong>
+  <strong>Most-recently-used order &middot; One tap goes back &middot; Vim and arrow navigation &middot; Every workspace at once</strong>
 </p>
 
 <p align="center">
-  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Use h and l to move through the icons while holding SUPER.
+  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Use h and l or the arrow keys to move through the icons, hover over an icon to select it, press Enter or click an icon to switch right away.
 </p>
 
 <p align="center">
@@ -46,9 +46,9 @@ dofile((os.getenv("XDG_CONFIG_HOME") or os.getenv("HOME") .. "/.config")
   .. "/omarchy/plugins/illegalstudio.omarchy-cmdtab/hyprland.lua")("SUPER")
 ```
 
-This replaces the default SUPER+TAB and SUPER+SHIFT+TAB workspace bindings. The bundled configuration creates a dedicated `omarchy-cmdtab` submap and enters it before launching the overlay. While switching, h, l, Escape, Tab and modifier release belong to Cmdtab; unused keys are consumed. Normal Omarchy shortcuts resume when the switcher closes.
+This replaces the default SUPER+TAB and SUPER+SHIFT+TAB workspace bindings. The bundled configuration creates a dedicated `omarchy-cmdtab` submap and enters it before launching the overlay. While switching, h, l, the left and right arrows, Enter, Escape, Tab and modifier release belong to Cmdtab; unused keys are consumed. Normal Omarchy shortcuts resume when the switcher closes.
 
-Remove the old Cmdtab binding block if upgrading, including the former global `cancelOrMenu`, `vimNavigate`, and modifier-release bindings. Keep your usual SUPER+H/L and SUPER+ESCAPE bindings: they no longer need to call the plugin and are isolated while Cmdtab is open.
+Remove the old Cmdtab binding block if upgrading, including the former global `cancelOrMenu`, `vimNavigate`, and modifier-release bindings. Keep your usual SUPER+H/L, SUPER+arrow, SUPER+RETURN and SUPER+ESCAPE bindings: they no longer need to call the plugin and are isolated while Cmdtab is open.
 
 For ALT+TAB, pass `"ALT"` instead of `"SUPER"` to the same function. Modifier-release handling is configured automatically.
 
@@ -65,19 +65,22 @@ Then remove the `dofile` call from `~/.config/hypr/bindings.lua` and reload Hypr
 
 Windows appear in a compact horizontal strip with large application icons, a rounded translucent background, and a highlight around the selection. Only the selected icon shows its application name beneath it. The strip scrolls when there are more windows than fit on screen.
 
-Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards; h and l move left and right.
+Windows are ordered most recently used first across every workspace. The first icon is the current window, the second is the one before it. **Hold SUPER, tap TAB, then release SUPER** to switch back. Keep holding SUPER and tap TAB again to continue through the list. SHIFT+TAB moves backwards; h and l, or the left and right arrows, move left and right. Moving the mouse over an icon selects it the same way; a pointer that stays still never changes the selection. Enter or a click on an icon switches to that window immediately.
 
 Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
 
-The switcher only supports keyboard selection and cancellation. It has no text search, mouse selection, arrow-key navigation, or Enter shortcut. Unused keys are swallowed while the overlay is open.
+The switcher has no text search. Unused keys are swallowed while the overlay is open.
 
 ## Keyboard controls
 
 | Key | Action |
 | --- | --- |
 | Release `SUPER` | Focus and raise the selected window. |
-| `l`, `Tab` | Next window, further back in time. |
-| `h`, `Shift+Tab` | Previous window. |
+| `l`, `Right`, `Tab` | Next window, further back in time. |
+| `h`, `Left`, `Shift+Tab` | Previous window. |
+| `Enter` | Focus and raise the selected window. |
+| Hover an icon | Select it, like the arrow keys. |
+| Click an icon | Focus and raise that window. |
 | `Esc` (also with SUPER held) | Cancel and close the switcher. |
 
 ## How the order is decided
@@ -114,7 +117,11 @@ omarchy-shell shell call illegalstudio.omarchy-cmdtab vimNavigate l
 
 `cycle` opens the switcher or moves the highlight by the given step. An optional `alt` argument, for example `cycle "1 alt"`, selects ALT release instead of SUPER release. `release` confirms only when its modifier matches. `confirm` activates the current selection and answers `closed` when the overlay is not up. A release received during the initial client query waits for the results before activating, so quick taps work too.
 
-`vimNavigate` accepts h or l and only moves the selection while the overlay is open. Closing the overlay restores the default Hyprland submap; Escape and modifier release also reset it directly in the compositor so they still work if shell IPC fails.
+The bundled bindings append a gesture id to every call, for example `cycle "1 super 1730000000-4"` and `release "super 1730000000-4"`. Hyprland runs each call as its own process, so a quick tap can deliver the release before the cycle that opens the switcher. The overlay keeps a release, `confirm` or `dismiss` that arrives first and applies it as soon as that gesture opens, and ignores late calls of a gesture that already closed. Calls without an id behave as described above.
+
+The modifier release binding is universal, transparent and non-consuming: SUPER is pressed before the submap is entered, and Hyprland only runs release binds of the submap active at press time and shadows binds of keys still held. It does nothing outside a switcher gesture, and applications still receive the modifier.
+
+`vimNavigate` accepts h or l (the arrow bindings send the same values) and only moves the selection while the overlay is open. Closing the overlay restores the default Hyprland submap; Escape, Enter and modifier release also reset it directly in the compositor so they still work if shell IPC fails.
 
 ## Development install
 

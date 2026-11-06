@@ -26,6 +26,17 @@ Item {
   property bool confirmOnLoad: false
   property bool keyboardApplied: false
   property bool keyboardTarget: false
+  // Last pointer position seen in window coordinates. Hover selects only when
+  // the pointer really moves, so an overlay opening under a still cursor, or
+  // icons scrolling beneath it, never steals the keyboard selection.
+  property var pointerPosition: null
+  // Each Hyprland gesture carries an id. Its cycle, release, Enter and Escape
+  // calls run as separate processes and can arrive out of order, so an end
+  // that overtakes the cycle opening its session is held in earlyEnd, and
+  // late calls for a session that already closed are ignored.
+  property string session: ""
+  property string closedSession: ""
+  property var earlyEnd: null
 
   property color background: Color.menu.background
   readonly property bool darkBackground: background.r * 0.299 + background.g * 0.587 + background.b * 0.114 < 0.5
@@ -59,23 +70,41 @@ Item {
     root.opened = true
     root.selectedIndex = 0
     root.selectedAddress = ""
+    root.pointerPosition = null
     displayModel.clear()
     root.initialStep = step
     root.holdModifier = payload && payload.modifier === "alt" ? "alt" : "super"
+    root.session = String((payload && payload.session) || "")
     root.confirmOnLoad = false
     root.pendingInitial = true
     root.syncKeyboard()
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+
+    var early = root.earlyEnd
+    root.earlyEnd = null
+    if (early && root.session && early.session === root.session) {
+      if (early.action === "dismiss") root.dismiss()
+      else root.confirm()
+    }
+  }
+
+  // Remember an end command that reached a closed switcher, in case the
+  // cycle call opening its session is still on the way.
+  function endEarly(action, id) {
+    var value = String(id || "").trim()
+    if (value && value !== root.closedSession) root.earlyEnd = { session: value, action: action }
   }
 
   function close() {
+    if (root.opened && root.session) root.closedSession = root.session
     root.opened = false
     root.confirmOnLoad = false
     root.syncKeyboard()
   }
 
-  function dismiss() {
+  function dismiss(id) {
+    if (!root.opened) root.endEarly("dismiss", id)
     root.close()
     if (root.shell && typeof root.shell.hide === "function") root.shell.hide(root.pluginId())
   }
@@ -93,15 +122,17 @@ Item {
     var parts = String(step || "1").trim().split(/\s+/)
     var delta = Number(parts[0])
     if (!isFinite(delta) || delta === 0) delta = 1
+    var id = parts[2] || ""
     if (root.opened) root.moveSelection(delta)
-    else root.open(JSON.stringify({ step: delta, modifier: parts[1] }))
+    else if (id && id === root.closedSession) return "ignored"
+    else root.open(JSON.stringify({ step: delta, modifier: parts[1], session: id }))
     return "ok"
   }
 
   // Activate the current selection, also used when the held modifier is released:
   //   omarchy-shell shell call illegalstudio.omarchy-cmdtab confirm ""
-  function confirm() {
-    if (!root.opened) return "closed"
+  function confirm(id) {
+    if (!root.opened) { root.endEarly("confirm", id); return "closed" }
     // A quick tap can release SUPER before hyprctl has returned the clients.
     if (root.pendingInitial) { root.confirmOnLoad = true; return "pending" }
     if (displayModel.count === 0) { root.dismiss(); return "empty" }
@@ -109,9 +140,10 @@ Item {
     return "ok"
   }
 
-  function release(modifier) {
-    if (!root.opened) return "closed"
-    if (String(modifier) !== root.holdModifier) return "ignored"
+  function release(argument) {
+    var parts = String(argument || "").trim().split(/\s+/)
+    if (!root.opened) { root.endEarly("release", parts[1]); return "closed" }
+    if (parts[0] !== root.holdModifier) return "ignored"
     return root.confirm()
   }
 
@@ -126,8 +158,9 @@ Item {
   function handleKey(key, modifiers) {
     if (!root.opened) return false
     if (key === Qt.Key_Escape) root.dismiss()
-    else if (key === Qt.Key_H) root.moveSelection(-1)
-    else if (key === Qt.Key_L) root.moveSelection(1)
+    else if (key === Qt.Key_Return || key === Qt.Key_Enter) root.confirm()
+    else if (key === Qt.Key_H || key === Qt.Key_Left) root.moveSelection(-1)
+    else if (key === Qt.Key_L || key === Qt.Key_Right) root.moveSelection(1)
     else if (key === Qt.Key_Backtab || (key === Qt.Key_Tab && (modifiers & Qt.ShiftModifier))) root.moveSelection(-1)
     else if (key === Qt.Key_Tab) root.moveSelection(1)
     // Consume every other key without activating a command or editing text.
@@ -315,6 +348,20 @@ Item {
     if (index < 0 || index >= displayModel.count) return
     root.selectedIndex = index
     root.selectedAddress = displayModel.get(index).address
+  }
+
+  function clickIndex(index) {
+    if (!root.opened || root.pendingInitial) return
+    root.selectIndex(index)
+    root.activate(index)
+  }
+
+  function hoverIndex(index, x, y) {
+    var last = root.pointerPosition
+    root.pointerPosition = { x: x, y: y }
+    if (!root.opened || root.pendingInitial || !last) return
+    if (last.x === x && last.y === y) return
+    root.selectIndex(index)
   }
 
   function moveSelection(delta) {
@@ -516,7 +563,16 @@ Item {
             elide: Text.ElideRight
           }
 
-
+          MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onPositionChanged: function(mouse) {
+              var point = mapToItem(null, mouse.x, mouse.y)
+              root.hoverIndex(index, point.x, point.y)
+            }
+            onClicked: root.clickIndex(index)
+          }
         }
       }
     }
