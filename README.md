@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Use h and l or the arrow keys to move through the icons, hover over an icon to select it, press Enter or click an icon to switch right away.
+  An Omarchy shell overlay that lists every open window in the order you last used them, the way Cmd+Tab does on macOS. Hold SUPER and tap TAB to select the window you just came from, keep tapping TAB to go further back, then release SUPER to bring the selection to the front. Use h and l or the arrow keys to move through the icons, hover over an icon to select it, press Enter or click an icon to switch right away. Press 1 to show only the windows of the current workspace, and 1 again to show every window.
 </p>
 
 <p align="center">
@@ -46,7 +46,7 @@ dofile((os.getenv("XDG_CONFIG_HOME") or os.getenv("HOME") .. "/.config")
   .. "/omarchy/plugins/illegalstudio.omarchy-cmdtab/hyprland.lua")("SUPER")
 ```
 
-This replaces the default SUPER+TAB and SUPER+SHIFT+TAB workspace bindings. The bundled configuration creates a dedicated `omarchy-cmdtab` submap and enters it before launching the overlay. While switching, h, l, the left and right arrows, Enter, Escape, Tab and modifier release belong to Cmdtab; unused keys are consumed. Normal Omarchy shortcuts resume when the switcher closes.
+This replaces the default SUPER+TAB and SUPER+SHIFT+TAB workspace bindings. The bundled configuration creates a dedicated `omarchy-cmdtab` submap and enters it before launching the overlay. While switching, h, l, the left and right arrows, 1, Enter, Escape, Tab and modifier release belong to Cmdtab; unused keys are consumed. Normal Omarchy shortcuts resume when the switcher closes.
 
 Remove the old Cmdtab binding block if upgrading, including the former global `cancelOrMenu`, `vimNavigate`, and modifier-release bindings. Keep your usual SUPER+H/L, SUPER+arrow, SUPER+RETURN and SUPER+ESCAPE bindings: they no longer need to call the plugin and are isolated while Cmdtab is open.
 
@@ -69,6 +69,10 @@ Windows are ordered most recently used first across every workspace. The first i
 
 Icons and application names come from desktop entries, including Omarchy webapps launched through Brave, Chrome, Chromium, and Edge. An app installed while the shell is running gets its icon the next time the switcher opens, without restarting the shell: names the Qt icon theme does not resolve are looked up directly in the hicolor and pixmaps directories. The selected window receives focus and is explicitly raised above other windows, including in floating workspaces.
 
+## Showing only the current workspace
+
+Press 1 while the switcher is open to keep only the windows of the active workspace, in the same most-recently-used order; press 1 again to show every window. A badge at the left end of the strip shows the scope, **All windows** or the workspace name, with a "Press 1 to toggle" hint. The highlighted window stays selected when it is in both lists; otherwise the highlight moves one step past the focused window, as a fresh SUPER+TAB would. The scope you leave the switcher in is kept for the next opening, so a quick SUPER+TAB stays on the current workspace until you press 1 again; restarting the shell resets it to all windows. With several monitors the active workspace is the one on the focused monitor.
+
 The switcher has no text search. Unused keys are swallowed while the overlay is open.
 
 ## Keyboard controls
@@ -78,6 +82,7 @@ The switcher has no text search. Unused keys are swallowed while the overlay is 
 | Release `SUPER` | Focus and raise the selected window. |
 | `l`, `Right`, `Tab` | Next window, further back in time. |
 | `h`, `Left`, `Shift+Tab` | Previous window. |
+| `1` | Show only the current workspace, or every window again. |
 | `Enter` | Focus and raise the selected window. |
 | Hover an icon | Select it, like the arrow keys. |
 | Click an icon | Focus and raise that window. |
@@ -158,7 +163,7 @@ After confirmation it updates the manifest if needed, runs `make check`, creates
 
 ## Safety
 
-The overlay runs `hyprctl`: `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup; for icon names that lookup misses, it runs a fixed `sh` script that only tests for files under the XDG data directories, with the names passed as arguments. The plugin writes no files.
+The overlay runs `hyprctl`: `-j activeworkspace`, `-j activewindow` and `-j clients` to read, and `eval` to manage the keyboard submap and focus the window you picked. The QML overlay passes fixed argument arrays. The bundled Lua bindings call shell IPC with fixed method names and quoted arguments. Window addresses are validated as hexadecimal before interpolation into Lua. Application metadata and icons are read through Quickshell's desktop-entry index and icon lookup; for icon names that lookup misses, it runs a fixed `sh` script that only tests for files under the XDG data directories, with the names passed as arguments. The plugin writes no files.
 
 ## License
 

@@ -20,6 +20,7 @@ const EXTRACTED = [
   "moveSelection", "clickIndex", "hoverIndex", "cycle", "open", "toggle", "dismiss",
   "close", "confirm",
   "release", "endEarly", "vimNavigate", "normalizedAppId", "applicationFor", "iconSource", "findMissingIcons", "iconsFound", "activate", "handleKey", "syncKeyboard", "keyboardFinished",
+  "toggleScope", "loadWorkspace",
 ];
 
 function extract(name) {
@@ -38,6 +39,7 @@ const build = new Function("displayModel", "resultList", "keyCatcher", "Qt", "Li
   const root = {
     opened: false, loading: false, selectedIndex: 0, windows: [],
     activeAddress: "", selectedAddress: "", pendingInitial: false, initialStep: 1,
+    workspaceOnly: false, activeWorkspaceId: 0, activeWorkspaceName: "",
     desktopEntries: [], shell: null, manifest: null, activated: -1,
     holdModifier: "super", confirmOnLoad: false, runActivation: false,
     keyboardApplied: false, keyboardTarget: false, pointerPosition: null,
@@ -55,7 +57,7 @@ const QT = {
   Key_Escape: 0x01000000, Key_Tab: 0x01000001, Key_Backtab: 0x01000002,
   Key_H: 72, Key_L: 76, Key_Return: 0x01000004, Key_Enter: 0x01000005,
   Key_Left: 0x01000012, Key_Right: 0x01000014,
-  Key_N: 78, Key_P: 80, Key_A: 65, Key_Backspace: 0x01000003,
+  Key_1: 49, Key_N: 78, Key_P: 80, Key_A: 65, Key_Backspace: 0x01000003,
   ShiftModifier: 0x02000000, ControlModifier: 0x04000000,
   AltModifier: 0x08000000, MetaModifier: 0x10000000,
   callLater(fn) { fn(); },
@@ -85,6 +87,7 @@ function makeRoot() {
       iconPath(icon) { return themeIcons.has(icon) ? "image://icon/" + icon : ""; } },
     { fileUrl(file) { return "file://" + file; } }, keyboardProc, iconProc);
   root.commands = commands;
+  root.displayModel = displayModel;
   root.keyboardProc = keyboardProc;
   root.iconProc = iconProc;
   root.themeIcons = themeIcons;
@@ -100,13 +103,25 @@ const mru = clients
 const addresses = mru.map((client) => client.address);
 const ACTIVE = addresses[0];
 
+const ACTIVE_WORKSPACE = clients.find((client) => client.address === ACTIVE).workspace.id;
+const onWorkspace = mru
+  .filter((client) => client.workspace.id === ACTIVE_WORKSPACE)
+  .map((client) => client.address);
+
 // A switcher opened with SUPER+TAB, its window list already loaded.
 function openedSwitcher(step = 1, raw = fixture) {
   const root = makeRoot();
   root.activeAddress = ACTIVE;
   root.cycle(String(step));
+  root.loadWorkspace(JSON.stringify({ id: ACTIVE_WORKSPACE, name: String(ACTIVE_WORKSPACE) }));
   root.loadClients(raw);
   return root;
+}
+
+function shown(root) {
+  const rows = [];
+  for (let i = 0; i < root.displayModel.count; i++) rows.push(root.displayModel.get(i).address);
+  return rows;
 }
 
 let passed = 0;
@@ -637,6 +652,93 @@ test("a capture process failure closes the switcher", () => {
   root.keyboardProc.running = false;
   root.keyboardFinished(0);
   assert.equal(root.keyboardApplied, false);
+});
+
+test("key 1 toggles between every window and the active workspace", () => {
+  const root = openedSwitcher();
+  assert.ok(onWorkspace.length > 1 && onWorkspace.length < addresses.length);
+  assert.deepEqual(shown(root), addresses);
+  assert.equal(root.toggleScope(), "workspace");
+  assert.deepEqual(shown(root), onWorkspace);
+  assert.equal(root.toggleScope(), "all");
+  assert.deepEqual(shown(root), addresses);
+  root.handleKey(QT.Key_1, QT.MetaModifier);
+  assert.equal(root.workspaceOnly, true);
+  assert.deepEqual(shown(root), onWorkspace);
+  assert.deepEqual(root.commands, []);
+});
+
+test("the highlighted window stays selected when it is in both scopes", () => {
+  const root = openedSwitcher();
+  const held = root.selectedAddress;
+  assert.ok(onWorkspace.includes(held));
+  root.toggleScope();
+  assert.equal(root.selectedAddress, held);
+  root.toggleScope();
+  assert.equal(root.selectedAddress, held);
+});
+
+test("a highlight outside the workspace moves one step past the focused window", () => {
+  const root = openedSwitcher();
+  const outside = addresses.findIndex((address) => !onWorkspace.includes(address));
+  root.selectIndex(outside);
+  root.toggleScope();
+  assert.equal(root.selectedAddress, onWorkspace[1]);
+});
+
+test("the scope carries over to the next opening", () => {
+  const root = openedSwitcher();
+  root.toggleScope();
+  root.dismiss();
+  root.cycle("1");
+  assert.equal(root.workspaceOnly, true);
+  root.loadClients(fixture);
+  assert.deepEqual(shown(root), onWorkspace);
+  // A quick SUPER+TAB returns to the last window used on this workspace.
+  assert.equal(root.selectedAddress, onWorkspace[1]);
+  root.toggleScope();
+  root.dismiss();
+  root.cycle("1");
+  root.loadClients(fixture);
+  assert.deepEqual(shown(root), addresses);
+});
+
+test("key 1 during loading filters the list once the clients arrive", () => {
+  const root = makeRoot();
+  root.activeAddress = ACTIVE;
+  root.cycle("1");
+  root.loadWorkspace(JSON.stringify({ id: ACTIVE_WORKSPACE, name: "web" }));
+  assert.equal(root.toggleScope(), "pending");
+  root.loadClients(fixture);
+  assert.deepEqual(shown(root), onWorkspace);
+  assert.equal(root.selectedAddress, onWorkspace[1]);
+  assert.equal(root.activeWorkspaceName, "web");
+});
+
+test("an empty workspace shows nothing and releasing SUPER switches nowhere", () => {
+  const root = makeRoot();
+  root.cycle("1");
+  root.loadWorkspace(JSON.stringify({ id: 9, name: "9" }));
+  root.loadClients(fixture);
+  root.toggleScope();
+  assert.equal(root.displayModel.count, 0);
+  assert.equal(root.selectedAddress, "");
+  root.release("super");
+  assert.equal(root.opened, false);
+  assert.equal(root.activated, -1);
+});
+
+test("the scope toggle does nothing while closed", () => {
+  const root = makeRoot();
+  assert.equal(root.toggleScope(), "closed");
+  assert.equal(root.workspaceOnly, false);
+});
+
+test("a malformed active workspace reply filters to nothing instead of throwing", () => {
+  const root = makeRoot();
+  root.loadWorkspace("not json");
+  assert.equal(root.activeWorkspaceId, 0);
+  assert.equal(root.activeWorkspaceName, "");
 });
 
 console.log(`\n${passed} switcher tests passed`);

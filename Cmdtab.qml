@@ -20,6 +20,11 @@ Item {
   // Selection is tracked by address as well as by row so a background poll
   // that reorders or trims the list cannot move the highlight under the user.
   property string selectedAddress: ""
+  // Key 1 toggles between every window and those on the active workspace.
+  // The choice carries over to later openings until the shell restarts.
+  property bool workspaceOnly: false
+  property int activeWorkspaceId: 0
+  property string activeWorkspaceName: ""
   property bool pendingInitial: false
   property int initialStep: 1
   property string holdModifier: "super"
@@ -69,11 +74,17 @@ Item {
   readonly property int cornerRadius: Style.space(26)
   property string fontFamily: "sans-serif"
   readonly property int contentMargin: Style.space(22)
+  readonly property int scopeInset: Style.space(12)
+  readonly property int scopeWidth: Style.space(88)
+  readonly property int scopeGap: Style.space(12)
+  // The scope badge and its divider fill the left of the card, in place of
+  // the list's left margin.
+  readonly property int scopeSection: scopeInset + scopeWidth + scopeGap * 2 + 1
   readonly property int tileSize: Math.max(Style.space(84), Math.min(Style.space(124),
-    (panel.width - Style.space(100)) / Math.max(1, displayModel.count)))
+    (panel.width - Style.space(100) - scopeSection) / Math.max(1, displayModel.count)))
   readonly property int iconSize: Math.round(Math.min(tileSize * 0.7, tileSize - Style.space(36)))
   readonly property int cardWidth: Math.max(1, Math.min(panel.width - Style.space(40),
-    Math.max(Style.space(300), displayModel.count * tileSize + contentMargin * 2)))
+    Math.max(Style.space(380), displayModel.count * tileSize + scopeSection + contentMargin)))
   readonly property int cardHeight: tileSize + Style.space(36)
 
   function pluginId() {
@@ -181,9 +192,21 @@ Item {
     return "ok"
   }
 
+  // IPC entry point for key 1 inside the submap: switch between every window
+  // and the windows of the active workspace.
+  function toggleScope() {
+    if (!root.opened) return "closed"
+    root.workspaceOnly = !root.workspaceOnly
+    // While loading, the scope applies when the clients arrive.
+    if (root.pendingInitial) return "pending"
+    root.rebuildDisplay("scope")
+    return root.workspaceOnly ? "workspace" : "all"
+  }
+
   function handleKey(key, modifiers) {
     if (!root.opened) return false
     if (key === Qt.Key_Escape) root.dismiss()
+    else if (key === Qt.Key_1) root.toggleScope()
     else if (key === Qt.Key_Return || key === Qt.Key_Enter) root.confirm()
     else if (key === Qt.Key_H || key === Qt.Key_Left) root.moveSelection(-1)
     else if (key === Qt.Key_L || key === Qt.Key_Right) root.moveSelection(1)
@@ -216,11 +239,24 @@ Item {
   }
 
   function refresh() {
-    if (activeProc.running || clientsProc.running) return
+    if (workspaceProc.running || activeProc.running || clientsProc.running) return
     root.loading = true
-    // activewindow first: loadClients needs the focused address to place the
-    // initial highlight, and chaining keeps the two views of the same instant.
-    activeProc.running = true
+    // activeworkspace and activewindow first: loadClients needs the workspace
+    // to filter on and the focused address to place the initial highlight.
+    // The workspace is read on its own because an empty one has no window.
+    workspaceProc.running = true
+  }
+
+  function loadWorkspace(raw) {
+    var id = 0
+    var name = ""
+    try {
+      var workspace = JSON.parse(raw || "{}")
+      if (workspace && isFinite(Number(workspace.id))) id = Number(workspace.id)
+      if (workspace && workspace.name !== undefined) name = String(workspace.name)
+    } catch (error) { id = 0; name = "" }
+    root.activeWorkspaceId = id
+    root.activeWorkspaceName = name || (id ? String(id) : "")
   }
 
   function loadClients(raw) {
@@ -377,6 +413,7 @@ Item {
     displayModel.clear()
     for (var i = 0; i < root.windows.length; i++) {
       var win = root.windows[i]
+      if (root.workspaceOnly && win.workspaceId !== root.activeWorkspaceId) continue
       displayModel.append(win)
     }
 
@@ -398,7 +435,13 @@ Item {
       root.selectedIndex = ((anchor + root.initialStep) % count + count) % count
     } else {
       var restored = root.rowIndexOf(previous)
-      root.selectedIndex = restored >= 0 ? restored : Math.max(0, Math.min(root.selectedIndex, count - 1))
+      if (restored >= 0) root.selectedIndex = restored
+      else if (intent === "scope") {
+        // The highlighted window left the list: go one step past the focused
+        // window, as a fresh SUPER+TAB would in this scope.
+        var focused = root.rowIndexOf(root.activeAddress)
+        root.selectedIndex = focused >= 0 ? (focused + 1) % count : 0
+      } else root.selectedIndex = Math.max(0, Math.min(root.selectedIndex, count - 1))
     }
     root.selectedAddress = displayModel.get(root.selectedIndex).address
     Qt.callLater(function() {
@@ -459,6 +502,18 @@ Item {
   Connections {
     target: DesktopEntries.applications
     function onValuesChanged() { if (root.opened) root.refresh() }
+  }
+
+  Process {
+    id: workspaceProc
+    command: ["hyprctl", "-j", "activeworkspace"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.loadWorkspace(text)
+        activeProc.running = true
+      }
+    }
   }
 
   Process {
@@ -555,11 +610,83 @@ Item {
         }
       }
 
+      // Scope badge: every window, or only the active workspace (key 1).
+      Rectangle {
+        id: scopeBadge
+        x: root.scopeInset
+        y: root.scopeInset
+        width: root.scopeWidth
+        height: parent.height - root.scopeInset * 2
+        radius: root.cornerRadius - root.scopeInset
+        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b,
+          root.workspaceOnly ? 0.16 : 0.06)
+        border.width: root.workspaceOnly ? 1 : 0
+        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.12)
+        antialiasing: true
+        Behavior on color { ColorAnimation { duration: 90 } }
+
+        Column {
+          anchors.centerIn: parent
+          spacing: Style.space(2)
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: scopeBadge.width - Style.space(12)
+            text: root.workspaceOnly ? (root.activeWorkspaceName || "?") : "All"
+            color: root.foreground
+            font.family: root.fontFamily
+            font.pixelSize: Style.space(20)
+            font.weight: Font.DemiBold
+            horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+          }
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: root.workspaceOnly ? "workspace" : "windows"
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.6)
+            font.family: root.fontFamily
+            font.pixelSize: Style.space(10)
+            font.weight: Font.Medium
+          }
+          Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: scopeBadge.width - Style.space(10)
+            topPadding: Style.space(4)
+            text: "Press 1 to toggle"
+            color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.space(9)
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+          }
+        }
+      }
+
+      Rectangle {
+        x: scopeBadge.x + scopeBadge.width + root.scopeGap
+        anchors.verticalCenter: parent.verticalCenter
+        width: 1
+        height: parent.height * 0.5
+        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.14)
+      }
+
+      Text {
+        x: resultList.x
+        width: resultList.width
+        anchors.verticalCenter: parent.verticalCenter
+        horizontalAlignment: Text.AlignHCenter
+        visible: displayModel.count === 0 && !root.pendingInitial
+        text: root.workspaceOnly ? "No windows on this workspace" : "No windows"
+        color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.6)
+        font.family: root.fontFamily
+        font.pixelSize: Style.space(14)
+        font.weight: Font.Medium
+      }
+
       ListView {
         id: resultList
-        x: root.contentMargin
+        x: root.scopeSection
         y: Style.space(18)
-        width: parent.width - root.contentMargin * 2
+        width: parent.width - root.scopeSection - root.contentMargin
         height: root.tileSize
         orientation: ListView.Horizontal
         interactive: false

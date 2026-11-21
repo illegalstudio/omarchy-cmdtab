@@ -51,6 +51,9 @@ return function(modifier)
     -- bindings keep working whenever the switcher is closed.
     hl.bind("LEFT", function() call("vimNavigate", "h") end, { ignore_mods = true, repeating = true })
     hl.bind("RIGHT", function() call("vimNavigate", "l") end, { ignore_mods = true, repeating = true })
+    -- Key 1 by keycode, so it works on any layout and with SHIFT held:
+    -- switch between every window and the active workspace's windows.
+    hl.bind("code:10", function() call("toggleScope") end, { ignore_mods = true })
     for _, prefix in ipairs({ "", modifier .. " + " }) do
       hl.bind(prefix .. "TAB", function() cycle("1") end)
       hl.bind(prefix .. "SHIFT + TAB", function() cycle("-1") end)

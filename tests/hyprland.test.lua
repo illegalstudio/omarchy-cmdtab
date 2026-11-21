@@ -83,6 +83,13 @@ for _, modifier in ipairs({ "SUPER", "ALT" }) do
     assert(actions[1].value:find('vimNavigate "' .. direction .. '"', 1, true))
   end
 
+  clear()
+  local scope = binding("code:10")
+  assert(scope.options.ignore_mods, "Key 1 must work while the modifier is held")
+  scope.handler()
+  assert(#actions == 1 and actions[1].kind == "exec")
+  assert(actions[1].value:find('toggleScope ""', 1, true), "Key 1 toggles the workspace scope")
+
   for _, key in ipairs({ "RETURN", "KP_Enter" }) do
     clear()
     local item = binding(key)
